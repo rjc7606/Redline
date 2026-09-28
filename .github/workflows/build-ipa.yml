@@ -11,6 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test RedlineCore
+        run: swift test --package-path Redline
+
       - name: Install XcodeGen
         run: brew install xcodegen
 
