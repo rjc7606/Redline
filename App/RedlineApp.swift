@@ -10,6 +10,7 @@ struct RedlineApp: App {
             RootView()
                 .environment(model)
                 .preferredColorScheme(model.preferredColorScheme)
+                .onOpenURL { url in model.openPDF(from: url) }
         }
     }
 }

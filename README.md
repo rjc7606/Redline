@@ -4,8 +4,8 @@ iPad markup, drawing and notes app (SwiftUI, iPadOS 17+). Three document types s
 annotation engine, one toolbar behaviour, one Style Popover and one set of colour palettes:
 
 - **Markups** — PDF annotation: Favorites / Draw / Annotate / Edit / Forms tabs, comments with
-  authors, status and replies, form fields, organize pages, import a real PDF or start from the
-  sample plan set.
+  authors, status and replies, form fields, organize pages. Import a PDF from Files (or open one
+  with "Open in Redline"), or create a new PDF on blank, dot, grid or lined paper.
 - **Drawings** — layered plan sets: a Base layer plus trace layers with a white "veil", lock/hide,
   flatten down / flatten all.
 - **Notes** — paged notebooks: paper colours, templates, tags, single page or facing spread, and a
@@ -42,6 +42,15 @@ swift test
   preset colours) lives in `RedlineCore` (`Metrics`, `ThemeTokens`, `ToolStyles`) so the app and
   tests share one source of truth.
 - Documents, settings, palettes and presets are saved as JSON in the app's Application Support
-  directory; imported PDFs are copied next to it.
+  directory. Imported PDFs are copied into `Documents/PDFs` and "Save to Files" exports go to
+  `Documents/Exports`, both visible in the Files app under On My iPad › Redline. PDFs can also be
+  opened from Files or the share sheet ("Open in Redline").
+- On PDF pages the highlighter, underline, strikethrough and squiggly tools snap to the page's text
+  lines (PDFKit selection); pages without text fall back to a freehand band.
+- The Pen responds to Apple Pencil pressure; Fineliner, Felt tip and Marker draw at a constant width.
+- A finger moves the page (pan, or flip in notebooks) and can place tap tools; the Apple Pencil draws.
+  The Select tool (pinned beside Organize Pages) selects with a tap, a diagonal box drag, or a lasso.
+- The eraser cuts only the touched part out of ink strokes. Double-tapping an Apple Pencil switches
+  to the eraser and back (it follows the system Pencil "Double Tap" setting).
 - Measure tools, edit text / insert image / link / crop, custom stamps and append/extract pages
   currently show a "coming soon" toast, matching the prototype's preview-only behaviour.

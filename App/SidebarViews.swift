@@ -13,6 +13,8 @@ struct SidebarView: View {
                 .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
             switch editor.sideTab {
             case .comments: CommentsPanel(editor: editor)
+            case .bookmarks: BookmarksPanel(editor: editor)
+            case .outline: OutlinePanel(editor: editor)
             case .forms: FormsPanel(editor: editor)
             case .pages: PagesPanel(editor: editor)
             case .layers: LayersPanel(editor: editor)

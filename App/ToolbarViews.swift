@@ -1,7 +1,15 @@
 import SwiftUI
 import RedlineCore
 
-// MARK: - Tool button (tap = pick, long-press = presets popover)
+/// Button frames, collected so the presets dropdown can be positioned under the active tool.
+struct ToolAnchorKey: PreferenceKey {
+    static var defaultValue: [Tool: Anchor<CGRect>] { [:] }
+    static func reduce(value: inout [Tool: Anchor<CGRect>], nextValue: () -> [Tool: Anchor<CGRect>]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+// MARK: - Tool button (tap = pick and show presets; tap again = deselect)
 
 struct ToolButton: View {
     @Environment(\.theme) private var theme
@@ -9,11 +17,6 @@ struct ToolButton: View {
     var tool: Tool
     /// Favorites edit mode: index in the pins list (shows the remove badge).
     var editIndex: Int? = nil
-
-    private var presetsShown: Binding<Bool> {
-        Binding(get: { editor.presetsTool == tool },
-                set: { if !$0 && editor.presetsTool == tool { editor.presetsTool = nil; editor.styleExpanded = false } })
-    }
 
     var body: some View {
         let on = editor.tool == tool && tool.kind != .pageAction && tool.kind != .flash
@@ -42,11 +45,7 @@ struct ToolButton: View {
         .frame(width: Metrics.toolHit, height: Metrics.toolHit)
         .contentShape(Rectangle())
         .onTapGesture { editor.pick(tool) }
-        .onLongPressGesture(minimumDuration: Metrics.longPress) { editor.openPresets(tool) }
-        .popover(isPresented: presetsShown, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
-            PresetsPopoverContent(editor: editor)
-                .presentationCompactAdaptation(.popover)
-        }
+        .anchorPreference(key: ToolAnchorKey.self, value: .bounds) { [tool: $0] }
         .overlay(alignment: .topTrailing) {
             if let i = editIndex {
                 Button { editor.removePin(at: i) } label: {
@@ -60,8 +59,8 @@ struct ToolButton: View {
     }
 }
 
-/// Popover content: the 4 presets, or the full Style Popover once the selected preset is tapped again.
-struct PresetsPopoverContent: View {
+/// Dropdown under the active tool: the 4 presets, or the full Style Popover after a long-press on one.
+struct PresetsDropdown: View {
     @Environment(\.theme) private var theme
     var editor: WorkspaceModel
     var body: some View {
@@ -76,7 +75,31 @@ struct PresetsPopoverContent: View {
                     .frame(width: Metrics.presetsWidth)
             }
         }
-        .background(theme.popSolid)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(theme.popSolid)
+                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
+                .shadow(color: Shadows.popover.color, radius: Shadows.popover.radius, y: Shadows.popover.y)
+        )
+    }
+}
+
+/// Places the presets dropdown under whichever tool button is active, clamped to the window.
+struct PresetsDropdownHost: View {
+    var editor: WorkspaceModel
+    var anchors: [Tool: Anchor<CGRect>]
+    var body: some View {
+        GeometryReader { geo in
+            if let t = editor.presetsTool, let a = anchors[t] {
+                let r = geo[a]
+                let w = editor.styleExpanded ? Metrics.popoverWidth + 28 : Metrics.presetsWidth
+                let x = min(max(8, r.midX - w / 2), max(8, geo.size.width - w - 8))
+                PresetsDropdown(editor: editor)
+                    .fixedSize()
+                    .offset(x: x, y: r.maxY + 6)
+                    .popIn()
+            }
+        }
     }
 }
 
@@ -114,7 +137,7 @@ struct TopBar<Center: View>: View {
                 BarButton(symbol: "minus.magnifyingglass", label: "Zoom out") { editor.zoomOut() }
                 BarButton(symbol: "plus.magnifyingglass", label: "Zoom in") { editor.zoomIn() }
             }
-            BarButton(symbol: "ruler", label: "Ruler lock — straight lines", active: editor.rulerLock) { editor.toggleRuler() }
+            BarButton(symbol: "ruler", label: "Ruler", active: editor.ruler.on) { editor.toggleRuler() }
             BarButton(symbol: "square.and.arrow.up", label: "Share", active: editor.popover == .export, filledWhenActive: true) {
                 editor.popover = editor.popover == .export ? nil : .export
             }
@@ -206,6 +229,7 @@ struct MarkupToolStrip: View {
                 editor.organizeOpen.toggle(); editor.closePopovers()
             }
             .padding(.leading, 10)
+            ToolButton(editor: editor, tool: .select)
             Rectangle().fill(theme.line2).frame(width: 1, height: 30).padding(.horizontal, 8)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Metrics.toolGap) {

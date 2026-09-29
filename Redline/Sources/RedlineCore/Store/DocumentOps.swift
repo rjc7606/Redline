@@ -70,6 +70,23 @@ public extension Document {
         pruneComments()
     }
 
+    /// Partial erase: cuts ink strokes near `p`. Other annotation types are never affected.
+    /// Returns true when anything changed.
+    @discardableResult
+    mutating func erase(at p: Point, radius r: Double, at ctx: StrokeContext) -> Bool {
+        var changed = false
+        editStrokes(at: ctx) { arr in
+            var out: [Stroke] = []
+            out.reserveCapacity(arr.count)
+            for s in arr {
+                if let pieces = Hit.erase(s, at: p, radius: r) { changed = true; out.append(contentsOf: pieces) } else { out.append(s) }
+            }
+            arr = out
+        }
+        if changed { pruneComments() }
+        return changed
+    }
+
     mutating func updateStrokes(ids: Set<ID>, at ctx: StrokeContext, _ body: (inout Stroke) -> Void) {
         editStrokes(at: ctx) { arr in
             for i in arr.indices where ids.contains(arr[i].id) { body(&arr[i]) }
@@ -220,7 +237,10 @@ public extension Document {
     mutating func insertPage(after index: Int, now: Date = Date()) -> Int {
         let np: Page
         switch type {
-        case .markup: np = .markup(label: "Inserted Page", created: now)
+        case .markup:
+            var p = Page.markup(label: "Page \(pages.count + 1)", created: now)
+            p.template = pages.last?.template ?? .blank
+            np = p
         case .drawing: np = .drawing(created: now)
         case .journal:
             let prev = pages.last ?? .journal(template: .lined, paper: .cream)

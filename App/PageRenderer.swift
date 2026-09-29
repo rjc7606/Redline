@@ -64,7 +64,7 @@ enum PageRenderer {
             if let img = input.pdfImage {
                 ctx.draw(Image(uiImage: img), in: pageRect)
             } else {
-                SheetArtwork.draw(kind: input.page.artwork, in: ctx, ink: Color(hex: input.blueprint ? blueprintInk : plainInk))
+                drawTemplate(input.page.template, paperDark: input.blueprint, in: ctx, W: W, H: H)
             }
         case .drawing:
             break

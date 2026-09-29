@@ -111,13 +111,13 @@ public enum ToolCatalog {
     /// Markup workspace tabs (excluding the user-defined Favorites tabs).
     public static let markupTabs: [ToolTab] = [
         ToolTab(id: "draw", label: "Draw", tools: [.pen, .fineliner, .felt, .marker, .fill, .eraser, .rect, .ellipse, .line, .arrow, .dblarrow, .polyline, .polygon, .check, .xmark, .cloud, .distance, .perimeter, .area, .calibrate]),
-        ToolTab(id: "annotate", label: "Annotate", tools: [.select, .lasso, .highlighter, .underline, .strike, .squiggly, .textbox, .note, .callout, .stamps, .signature, .datestamp, .initials]),
+        ToolTab(id: "annotate", label: "Annotate", tools: [.highlighter, .underline, .strike, .squiggly, .textbox, .note, .callout, .stamps, .signature, .datestamp, .initials]),
         ToolTab(id: "edit", label: "Edit", tools: [.edittext, .image, .link, .redact, .rotatepg, .crop]),
         ToolTab(id: "forms", label: "Forms", tools: [.ftext, .farea, .fcheck, .fradio, .fdrop, .fdate, .fsig, .ftoggle])
     ]
 
     /// Default Favorites tab contents.
-    public static let defaultFavorites: [Tool] = [.select, .highlighter, .pen, .eraser, .textbox, .cloud, .rect, .arrow, .stamps]
+    public static let defaultFavorites: [Tool] = [.highlighter, .pen, .eraser, .textbox, .cloud, .rect, .arrow, .stamps]
 
     /// Drawing workspace tools.
     public static let drawingTools: [Tool] = [.select, .pen, .fineliner, .felt, .marker, .eraser, .textbox, .rect, .ellipse]
@@ -139,10 +139,10 @@ public enum ToolCatalog {
     // swiftlint:disable line_length
     public static let info: [Tool: ToolInfo] = [
         .none: ToolInfo(label: "Pan", kind: .none, symbol: "hand.raised"),
-        .select: ToolInfo(label: "Select", kind: .select, symbol: "cursorarrow"),
+        .select: ToolInfo(label: "Select — tap an item, drag a box, or draw a lasso", kind: .select, symbol: "cursorarrow"),
         .lasso: ToolInfo(label: "Lasso select", kind: .lasso, symbol: "lasso"),
 
-        .pen: ToolInfo(label: "Rollerball", kind: .ink, glyph: "M6.5 12.5h11v9h-11z", glyph2: "M6.5 12.5L10 4.5h4L17.5 12.5", glyphFill: "M10.5 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0", hasPresets: true),
+        .pen: ToolInfo(label: "Pen", kind: .ink, glyph: "M6.5 12.5h11v9h-11z", glyph2: "M6.5 12.5L10 4.5h4L17.5 12.5", glyphFill: "M10.5 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0", hasPresets: true),
         .fineliner: ToolInfo(label: "Fineliner", kind: .ink, glyph: "M7 13h10v8.5H7z", glyph2: "M7 13c0-3.4 2.1-5 5-5s5 1.6 5 5M10.5 8V5.5h3V8M12 5.5v-3", hasPresets: true),
         .felt: ToolInfo(label: "Felt tip", kind: .ink, glyph: "M7 13h10v8.5H7z", glyph2: "M7.5 13v-3h9v3M9.5 10V7l2.5-3.5L14.5 7v3", hasPresets: true),
         .marker: ToolInfo(label: "Marker", kind: .ink, glyph: "M6 13h12v8.5H6z", glyph2: "M6.5 13v-2.5h11V13M8.5 10.5V5l7-3v8.5", hasPresets: true),

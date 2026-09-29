@@ -21,7 +21,8 @@ struct NewDocumentDraft {
     /// Imported PDF (file name inside the PDF store) and its page count.
     var pdfFile: String? = nil
     var pdfPages: Int? = nil
-    var sampleSet: Bool = true
+    var sheetSize: Size? = nil
+    var landscape: Bool = false
 
     init(type: DocumentType) {
         self.type = type
@@ -50,8 +51,7 @@ final class AppModel {
     private var toastTask: Task<Void, Never>? = nil
     private var saveTask: Task<Void, Never>? = nil
 
-    /// Rendered PDF pages keyed by "file#index".
-    private var pdfCache: [String: UIImage] = [:]
+    let pdf = PDFService()
 
     init() {
         store = RedlineStore(data: AppModel.load() ?? Seed.data())
@@ -106,24 +106,40 @@ final class AppModel {
         let doc = store.createDocument(type: d.type, name: d.name, template: d.template, paper: d.paper,
                                        pageCount: d.pdfPages ?? 3, pdfFile: d.pdfFile)
         var created = doc
+        created.sheetSize = d.sheetSize
         if d.type == .markup && d.pdfFile == nil {
-            // Sample plan set: three seeded sheets.
-            created.pages = [Page.markup(label: "A-101 Floor Plan", artwork: "plan"),
-                             Page.markup(label: "A-201 Elevations", artwork: "elev"),
-                             Page.markup(label: "S-301 Wall Details", artwork: "detail")]
-            store.patch(doc.id) { $0 = created }
+            var p = Page.markup(label: "Page 1")
+            p.template = d.template
+            created.pages = [p]
+            created.sheetSize = d.landscape ? Metrics.letterLandscape : Metrics.letterPortrait
         }
+        store.patch(doc.id) { $0 = created }
         newDraft = nil
         scheduleSave()
         openDocument(doc.id)
     }
 
     func deleteDocument(_ id: ID) {
-        if let doc = store.document(id), let f = doc.pdfFile {
-            try? FileManager.default.removeItem(at: AppModel.pdfDirectory.appendingPathComponent(f))
+        if let doc = store.document(id), let f = doc.pdfFile, !store.data.docs.contains(where: { $0.id != id && $0.pdfFile == f }) {
+            pdf.forget(f)
+            try? FileManager.default.removeItem(at: pdf.url(for: f))
         }
         store.deleteDocument(id)
         scheduleSave()
+    }
+
+    /// "Open in Redline" from Files / Share sheet: import the PDF as a new markup and open it.
+    func openPDF(from url: URL) {
+        guard url.pathExtension.lowercased() == "pdf", let r = importPDF(from: url) else {
+            flash("Redline can open PDF files")
+            return
+        }
+        let doc = store.createDocument(type: .markup, name: url.deletingPathExtension().lastPathComponent, pageCount: r.pages, pdfFile: r.file)
+        store.patch(doc.id) { $0.sheetSize = r.sheetSize }
+        settings.shelf = .markup
+        settingsOpen = false
+        scheduleSave()
+        openDocument(doc.id)
     }
 
     /// Records an undoable mutation on a document and schedules a save.
@@ -156,8 +172,9 @@ final class AppModel {
         return base
     }
     static var dataFile: URL { directory.appendingPathComponent("redline.json") }
-    static var pdfDirectory: URL {
-        let d = directory.appendingPathComponent("PDFs", isDirectory: true)
+    /// Exports the user saves "to Files" land here (Documents/Exports, visible in the Files app).
+    static var exportsDirectory: URL {
+        let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Exports", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }
@@ -187,31 +204,33 @@ final class AppModel {
 
     // MARK: PDF import & rendering
 
-    /// Copies a picked PDF into the app's store. Returns (stored file name, page count).
-    func importPDF(from url: URL) -> (file: String, pages: Int)? {
+    /// Copies a picked PDF into Documents/PDFs (keeping its name, visible in Files).
+    /// Returns the stored file name, page count and the canvas size matching page 1's aspect ratio.
+    func importPDF(from url: URL) -> (file: String, pages: Int, sheetSize: Size)? {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let name = IDGen.make() + ".pdf"
-        let dest = AppModel.pdfDirectory.appendingPathComponent(name)
-        do {
-            try FileManager.default.copyItem(at: url, to: dest)
-        } catch {
-            return nil
+        let base = url.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "/", with: "-")
+        var name = base + ".pdf"
+        var n = 2
+        while FileManager.default.fileExists(atPath: PDFService.directory.appendingPathComponent(name).path) {
+            name = "\(base) \(n).pdf"
+            n += 1
         }
-        guard let doc = PDFDocument(url: dest), doc.pageCount > 0 else {
+        let dest = PDFService.directory.appendingPathComponent(name)
+        var coordError: NSError? = nil
+        var copied = false
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordError) { readURL in
+            copied = (try? FileManager.default.copyItem(at: readURL, to: dest)) != nil
+        }
+        guard copied, let doc = pdf.document(name), doc.pageCount > 0, let first = doc.page(at: 0) else {
+            pdf.forget(name)
             try? FileManager.default.removeItem(at: dest)
             return nil
         }
-        return (name, doc.pageCount)
+        return (name, doc.pageCount, PDFService.canvasSize(for: first))
     }
 
-    func pdfImage(file: String, pageIndex: Int) -> UIImage? {
-        let key = "\(file)#\(pageIndex)"
-        if let img = pdfCache[key] { return img }
-        let url = AppModel.pdfDirectory.appendingPathComponent(file)
-        guard let doc = PDFDocument(url: url), let page = doc.page(at: pageIndex) else { return nil }
-        let img = page.thumbnail(of: CGSize(width: 2000, height: 1414), for: .mediaBox)
-        pdfCache[key] = img
-        return img
+    func pdfImage(file: String, pageIndex: Int, canvas: Size) -> UIImage? {
+        pdf.image(file: file, index: pageIndex, canvas: canvas)
     }
 }

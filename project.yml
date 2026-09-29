@@ -19,6 +19,28 @@ targets:
     dependencies:
       - package: RedlineCore
         product: RedlineCore
+    # XcodeGen writes this Info.plist at generate time (it is git-ignored).
+    info:
+      path: Redline-Info.plist
+      properties:
+        CFBundleDisplayName: Redline
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Expose the app's Documents folder (imported PDFs, exports) in the Files app.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        # "Open in Redline" for PDFs from Files / Mail / the share sheet.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: PDF document
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - com.adobe.pdf
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.redline
@@ -27,12 +49,3 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "2" # iPad only
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Redline
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: >-
-          UIInterfaceOrientationPortrait
-          UIInterfaceOrientationPortraitUpsideDown
-          UIInterfaceOrientationLandscapeLeft
-          UIInterfaceOrientationLandscapeRight

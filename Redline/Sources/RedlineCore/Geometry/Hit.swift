@@ -36,6 +36,55 @@ public enum Hit {
         return StrokeGeometry.bounds(of: s).insetBy(-r).contains(p)
     }
 
+    /// Erases the part of an ink stroke within `r` of `p`. Returns nil when the stroke is untouched,
+    /// otherwise the remaining pieces (possibly empty). The eraser only affects ink; every other
+    /// annotation type is left alone.
+    public static func erase(_ s: Stroke, at p: Point, radius r: Double) -> [Stroke]? {
+        guard s.tool.kind == .ink else { return nil }
+        let tol = r + StrokeGeometry.width(of: s) / 2
+        // Resample so cuts follow the finger rather than jumping to the nearest vertex.
+        let pts = resample(s.points, maxStep: max(2, r / 2))
+        let inside = pts.map { $0.point.distance(to: p) <= tol }
+        guard inside.contains(true) else { return nil }
+        var pieces: [Stroke] = []
+        var run: [StrokePoint] = []
+        func flush() {
+            if run.count >= 2 {
+                var piece = s
+                piece.id = IDGen.make()
+                piece.points = run
+                pieces.append(piece)
+            }
+            run.removeAll()
+        }
+        for (i, q) in pts.enumerated() {
+            if inside[i] { flush() } else { run.append(q) }
+        }
+        flush()
+        // Keep the original id on the first piece so selection / comments stay linked.
+        if !pieces.isEmpty { pieces[0].id = s.id }
+        return pieces
+    }
+
+    /// Inserts intermediate points so no segment is longer than `maxStep`.
+    public static func resample(_ pts: [StrokePoint], maxStep: Double) -> [StrokePoint] {
+        guard pts.count > 1, maxStep > 0 else { return pts }
+        var out: [StrokePoint] = [pts[0]]
+        for i in 1..<pts.count {
+            let a = pts[i - 1], b = pts[i]
+            let d = a.point.distance(to: b.point)
+            let n = Int(ceil(d / maxStep))
+            if n > 1 {
+                for k in 1..<n {
+                    let t = Double(k) / Double(n)
+                    out.append(StrokePoint(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.p + (b.p - a.p) * t))
+                }
+            }
+            out.append(b)
+        }
+        return out
+    }
+
     /// Point-in-polygon (even-odd).
     public static func polygon(_ poly: [Point], contains p: Point) -> Bool {
         guard poly.count >= 3 else { return false }

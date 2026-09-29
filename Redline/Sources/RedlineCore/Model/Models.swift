@@ -156,18 +156,24 @@ public struct Stroke: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var commentID: ID?
     /// Uniform scale applied to placed items (stamps, notes, check marks…).
     public var scale: Double
+    /// Text-line rectangles (page coordinates) for markup snapped to PDF text: highlighter, underline, strike, squiggly.
+    public var rects: [Rect]?
 
     public init(id: ID = IDGen.make(), tool: Tool, color: String, points: [StrokePoint], width: Double? = nil,
                 weight: WeightMode = .constant, opacity: Double? = nil, lineStyle: LineStyle? = nil,
                 fill: String? = nil, fillPattern: FillPattern? = nil, fillOpacity: Double? = nil, text: String? = nil,
                 background: String? = nil, backgroundOpacity: Double? = nil, borderColor: String? = nil,
-                borderOpacity: Double? = nil, borderWidth: Double? = nil, commentID: ID? = nil, scale: Double = 1) {
+                borderOpacity: Double? = nil, borderWidth: Double? = nil, commentID: ID? = nil, scale: Double = 1, rects: [Rect]? = nil) {
         self.id = id; self.tool = tool; self.color = color; self.points = points; self.width = width
         self.weight = weight; self.opacity = opacity; self.lineStyle = lineStyle; self.fill = fill
         self.fillPattern = fillPattern; self.fillOpacity = fillOpacity; self.text = text
         self.background = background; self.backgroundOpacity = backgroundOpacity; self.borderColor = borderColor
         self.borderOpacity = borderOpacity; self.borderWidth = borderWidth; self.commentID = commentID; self.scale = scale
+        self.rects = rects
     }
+
+    /// Whether this stroke is anchored to PDF text lines.
+    public var isTextAnchored: Bool { !(rects?.isEmpty ?? true) }
 
     /// Axis-aligned bounds of the control points.
     public var bounds: Rect { Rect.bounding(points.map { $0.point }) }
@@ -177,6 +183,7 @@ public struct Stroke: Codable, Sendable, Identifiable, Equatable, Hashable {
     public func shifted(dx: Double, dy: Double) -> Stroke {
         var s = self
         s.points = points.map { StrokePoint($0.x + dx, $0.y + dy, $0.p) }
+        s.rects = rects?.map { Rect(x: $0.x + dx, y: $0.y + dy, w: $0.w, h: $0.h) }
         return s
     }
 
@@ -312,15 +319,19 @@ public struct Document: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var pdfFile: String?
     /// Page IDs the user bookmarked (Markup).
     public var bookmarks: [ID]
+    /// Logical page size override (imported PDFs keep their own aspect ratio).
+    public var sheetSize: Size?
 
     public init(id: ID = IDGen.make(), type: DocumentType, name: String, created: Date = Date(), modified: Date? = nil,
-                pages: [Page], comments: [Comment] = [], paper: Paper = .white, pdfFile: String? = nil, bookmarks: [ID] = []) {
+                pages: [Page], comments: [Comment] = [], paper: Paper = .white, pdfFile: String? = nil, bookmarks: [ID] = [],
+                sheetSize: Size? = nil) {
         self.id = id; self.type = type; self.name = name; self.created = created; self.modified = modified ?? created
         self.pages = pages; self.comments = comments; self.paper = paper; self.pdfFile = pdfFile; self.bookmarks = bookmarks
+        self.sheetSize = sheetSize
     }
 
     /// Logical canvas size in points.
-    public var canvasSize: Size { type == .journal ? Metrics.notesCanvas : Metrics.sheetCanvas }
+    public var canvasSize: Size { sheetSize ?? (type == .journal ? Metrics.notesCanvas : Metrics.sheetCanvas) }
 
     public func pageIndex(of id: ID) -> Int? { pages.firstIndex { $0.id == id } }
 

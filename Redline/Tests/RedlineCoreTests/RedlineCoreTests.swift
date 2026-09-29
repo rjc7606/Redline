@@ -2,6 +2,19 @@ import Foundation
 import Testing
 @testable import RedlineCore
 
+/// Small fixture set used by the store / calendar / persistence tests.
+func fixtureData() -> RedlineData {
+    let now = Date()
+    var markup = Document(type: .markup, name: "Plan.pdf", created: now - 86400, pages: [.markup(label: "Page 1"), .markup(label: "Page 2")])
+    markup.pages[0].strokes = [Stroke(tool: .pen, color: "#000", points: [StrokePoint(1, 1), StrokePoint(5, 5)], width: 2)]
+    let journal = Document(type: .journal, name: "Notebook", created: now - 3 * 86400, pages: [
+        .journal(template: .blank, paper: .grey, created: now - 3 * 86400),
+        .journal(template: .lined, paper: .cream, tags: ["site"], created: now - 86400),
+        .journal(template: .dot, paper: .white, created: now)
+    ])
+    return RedlineData(docs: [markup, journal], settings: AppSettings(author: "Tessa Mahler"))
+}
+
 // MARK: Colours & formatting
 
 @Test func hexParsing() {
@@ -129,6 +142,47 @@ import Testing
     #expect(simplified == [Point(0, 0), Point(3, 0), Point(3, 10)])
 }
 
+@Test func partialErase() {
+    let s = Stroke(tool: .pen, color: "#000", points: [StrokePoint(0, 0), StrokePoint(100, 0)], width: 2)
+    #expect(Hit.erase(s, at: Point(50, 40), radius: 10) == nil)
+    let pieces = Hit.erase(s, at: Point(50, 0), radius: 5)!
+    #expect(pieces.count == 2)
+    #expect(pieces[0].id == s.id && pieces[1].id != s.id)
+    #expect(pieces[0].points.last!.x < 45 && pieces[1].points.first!.x > 55)
+    let gone = Hit.erase(s, at: Point(50, 0), radius: 80)!
+    #expect(gone.isEmpty)
+    let stamp = Stroke(tool: .stamps, color: "#000", points: [StrokePoint(50, 50)], text: "OK")
+    #expect(Hit.erase(stamp, at: Point(50, 50), radius: 4) == nil)
+    let box = Stroke(tool: .rect, color: "#000", points: [StrokePoint(0, 0), StrokePoint(100, 100)])
+    #expect(Hit.erase(box, at: Point(50, 0), radius: 10) == nil)
+    var doc = Document(type: .markup, name: "m", pages: [.markup()])
+    let ctx = StrokeContext(pageIndex: 0)
+    doc.addStroke(s, at: ctx, author: "Me", session: nil)
+    let erased = doc.erase(at: Point(50, 0), radius: 5, at: ctx)
+    #expect(erased)
+    #expect(doc.pages[0].strokes.count == 2 && doc.comments.count == 1)
+    #expect(doc.pages[0].strokes.allSatisfy { $0.commentID == doc.comments[0].id })
+    let untouched = doc.erase(at: Point(50, 300), radius: 5, at: ctx)
+    #expect(!untouched)
+}
+
+@Test func textAnchoredMarkup() {
+    let hl = Stroke(tool: .highlighter, color: "#ff0", points: [StrokePoint(10, 10), StrokePoint(200, 30)], width: 22,
+                    rects: [Rect(x: 10, y: 5, w: 100, h: 12), Rect(x: 0, y: 20, w: 60, h: 12)])
+    let r = StrokeGeometry.render(hl)!
+    #expect(r.fillColor == "#ff0" && r.strokeColor == nil && r.multiply)
+    let b = StrokeGeometry.bounds(of: hl)
+    #expect(b.minX <= 0 && b.maxX >= 110)
+    let ul = Stroke(tool: .underline, color: "#f00", points: [StrokePoint(0, 0)], rects: [Rect(x: 0, y: 0, w: 50, h: 10)])
+    #expect(StrokeGeometry.render(ul)!.strokeColor == "#f00")
+    let shifted = hl.shifted(dx: 5, dy: 5)
+    #expect(shifted.rects?[0].x == 15)
+    var doc = Document(type: .markup, name: "m", pages: [.markup()], sheetSize: Size(1000, 1294))
+    #expect(doc.canvasSize == Size(1000, 1294))
+    doc.sheetSize = nil
+    #expect(doc.canvasSize == Metrics.sheetCanvas)
+}
+
 // MARK: History & store
 
 @Test func historyUndoRedo() {
@@ -142,7 +196,7 @@ import Testing
 }
 
 @Test func storeMutationsAndUndo() {
-    var store = RedlineStore(data: Seed.data())
+    var store = RedlineStore(data: fixtureData())
     let doc = store.documents(on: .markup)[0]
     let ctx = StrokeContext(pageIndex: 0)
     let before = store.document(doc.id)!.pages[0].strokes.count
@@ -208,6 +262,10 @@ import Testing
     let refused = single.deletePage(at: 0)
     #expect(!refused && single.pages.count == 1)
     var m = Document(type: .markup, name: "m", pages: [.markup(label: "A")])
+    m.pages[0].template = .grid
+    let ins = m.insertPage(after: 0)
+    #expect(ins == 1 && m.pages[1].template == .grid)
+    m.deletePage(at: 1)
     m.duplicatePage(at: 0)
     #expect(m.pages.count == 2 && m.pages[1].label == "A copy")
     m.rotatePage(at: 0)
@@ -243,13 +301,14 @@ import Testing
 }
 
 @Test func persistenceRoundTrip() throws {
-    let data = Seed.data()
+    let data = fixtureData()
     let bytes = try data.encode()
     let back = try RedlineData.decode(bytes)
     #expect(back.docs.count == data.docs.count)
     #expect(back.docs[0].pages[0].strokes == data.docs[0].pages[0].strokes)
     #expect(back.settings.author == "Tessa Mahler")
     #expect(back.palettes.palettes.count == 4)
+    #expect(Seed.data().docs.isEmpty)
 }
 
 // MARK: Journal
@@ -267,7 +326,7 @@ import Testing
 }
 
 @Test func calendarMonth() {
-    let doc = Seed.data().docs.first { $0.type == .journal }!
+    let doc = fixtureData().docs.first { $0.type == .journal }!
     let cal = CalendarMonth(document: doc, monthOffset: 0, mode: .created)
     #expect(cal.cells.count == 35 || cal.cells.count == 42)
     #expect(cal.cells.contains { $0.isToday })

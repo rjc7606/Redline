@@ -25,6 +25,9 @@ public enum Metrics {
     public static let toastSeconds: Double = 2
 
     public static let sheetCanvas = Size(1000, 707)
+    /// Created (non-imported) markup pages: US Letter portrait / landscape at 1000 wide.
+    public static let letterPortrait = Size(1000, 1294)
+    public static let letterLandscape = Size(1000, 773)
     public static let notesCanvas = Size(600, 800)
     public static let defaultZoom: Double = 0.72
     public static let minZoom: Double = 0.3

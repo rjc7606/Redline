@@ -1,9 +1,20 @@
 import SwiftUI
+import UIKit
 import RedlineCore
 
 enum SideTab: String, CaseIterable, Hashable {
-    case comments, forms, pages, layers, tags
+    case comments, bookmarks, outline, forms, pages, layers, tags
     var label: String { rawValue.capitalized }
+}
+
+/// On-page ruler (page coordinates).
+struct RulerState: Equatable {
+    var on = false
+    var x = 500.0
+    var y = 360.0
+    /// Degrees, 0 ..< 180.
+    var angle = 0.0
+    var lock = false
 }
 
 enum MarkupTab: Hashable {
@@ -31,6 +42,8 @@ struct PointerSample {
     var location: CGPoint      // in the page's scaled view coordinates
     var pressure: Double
     var isPencil: Bool
+    /// Location in window coordinates (stable while the page itself is being panned).
+    var window: CGPoint = .zero
 }
 
 /// Editing state for one open document (tool, page, zoom, selection, in-progress input).
@@ -58,6 +71,10 @@ final class WorkspaceModel {
     var lasso: [Point]? = nil
     var marquee: Rect? = nil
     var eraseHits: Set<ID> = []
+    /// Tool to return to after a Pencil double-tap switched to the eraser.
+    var toolBeforeEraser: Tool? = nil
+    private var previousTool: Tool = .pen
+    private var eraseSnapshotPending = false
 
     var presetsTool: Tool? = nil
     var styleExpanded = false
@@ -67,7 +84,11 @@ final class WorkspaceModel {
     var organizeOpen = false
     var stampText = "APPROVED"
     var stampColor = "#34C759"
-    var rulerLock = false
+    var ruler = RulerState()
+    static let rulerLength = 820.0
+    static let rulerHeight = 72.0
+    private enum DrawMode { case free, edge(offset: Double, along0: Double), lock }
+    private var drawMode: DrawMode = .free
     var flatten: FlattenRequest? = nil
     var textPrompt: Point? = nil
     var textPromptPage = 0
@@ -100,10 +121,13 @@ final class WorkspaceModel {
     var isCompact = false
 
     private enum Drag {
-        case draw, marquee(Point), lasso, move(start: Point, base: [Stroke]), scale(center: Point, d0: Double, base: [Stroke]), erase, flip(x0: Double)
+        case draw, marquee(Point), lasso, move(start: Point, base: [Stroke]), scale(center: Point, d0: Double, base: [Stroke]), erase, flip(x0: Double), pan(last: CGPoint)
     }
     private var drag: Drag? = nil
     private var dragMoved = false
+    /// Points of the current selection drag; becomes a lasso once the path stops being a straight diagonal.
+    private var selectPath: [Point] = []
+    private var lassoMode = false
     /// Page index the in-progress pointer interaction belongs to (spreads draw on either page).
     var dragPage = 0
 
@@ -137,8 +161,9 @@ final class WorkspaceModel {
     var canRedo: Bool { app.store.canRedo(docID) }
 
     var sideTabs: [SideTab] {
-        switch type { case .markup: [.comments, .forms, .pages]; case .drawing: [.layers, .pages]; case .journal: [.pages, .tags] }
+        switch type { case .markup: [.comments, .bookmarks, .outline]; case .drawing: [.layers, .pages]; case .journal: [.pages, .tags] }
     }
+    var onFormsTab: Bool { markupTab == .tab("forms") }
     var sidebarWidth: Double { type == .markup ? Metrics.sidebarMarkup : Metrics.sidebarStudio }
 
     var favorites: [FavoritesTab] { app.settings.favorites }
@@ -174,7 +199,7 @@ final class WorkspaceModel {
         case .drawing:
             return "Drawing on: " + (activeLayerObject?.name ?? "Base")
         case .journal:
-            return rulerLock ? "Ruler lock: straight lines" : "Swipe with Select to flip pages"
+            return ruler.on ? (ruler.lock ? "Ruler locked: straight lines at the ruler angle" : "Draw along the ruler edge") : "Swipe with Select to flip pages"
         }
     }
 
@@ -229,25 +254,22 @@ final class WorkspaceModel {
             return
         }
         if tool == t {
-            // Tapping the active tool deselects it (README).
+            // Tapping the active tool deselects it and closes its presets.
             tool = type == .markup ? .select : .none
             session = nil
+            presetsTool = nil
+            styleExpanded = false
             return
         }
         let keepSession = t.isPen && (tool.isPen || tool == .eraser || tool == .none)
+        previousTool = tool
         tool = t
+        if t != .eraser { toolBeforeEraser = nil }
         if !keepSession { session = nil }
         if t != .select && t != .lasso { selection = []; selectedField = nil }
-        if let h = ToolCatalog.pickHint(for: t, rulerLocked: rulerLock) { app.flash(h) }
-    }
-
-    func openPresets(_ t: Tool) {
-        guard t.hasPresets else { return }
-        tool = t
-        presetsTool = t
-        styleExpanded = false
-        styleTarget = .color
-        popover = nil
+        // Tools with presets drop their four presets down under the button.
+        if t.hasPresets { presetsTool = t; styleExpanded = false; styleTarget = .color }
+        if let h = ToolCatalog.pickHint(for: t, rulerLocked: ruler.on && ruler.lock) { app.flash(h) }
     }
 
     func closePopovers() {
@@ -258,23 +280,68 @@ final class WorkspaceModel {
         tagPopoverPage = nil
     }
 
-    func selectPreset(_ i: Int) {
-        let t = styleTool
-        if app.styles.selectedIndex(for: t) == i {
-            styleExpanded.toggle()
-        } else {
-            app.styles.select(i, for: t)
-            styleExpanded = false
-        }
+    /// Tap on a preset: use it and close the dropdown (inside the editor it only switches presets).
+    func selectPreset(_ i: Int, closing: Bool = true) {
+        app.styles.select(i, for: styleTool)
+        if closing { presetsTool = nil; styleExpanded = false }
+    }
+
+    /// Long-press on a preset: open the full style editor for it.
+    func editPreset(_ i: Int) {
+        app.styles.select(i, for: styleTool)
+        styleTarget = .color
+        styleExpanded = true
     }
 
     func updateStyle(_ body: (inout StylePreset) -> Void) {
         app.styles.update(styleTool, body)
     }
 
+    /// Pencil double-tap: eraser ⇄ the pen you were using (or previous tool, per the system setting).
+    func pencilDoubleTap() {
+        closePopovers()
+        if UIPencilInteraction.preferredTapAction == .switchPrevious {
+            let p = previousTool
+            previousTool = tool
+            tool = p == .none ? .pen : p
+            app.flash(tool.label)
+            return
+        }
+        if tool == .eraser {
+            let back = toolBeforeEraser ?? (previousTool == .eraser ? .pen : previousTool)
+            toolBeforeEraser = nil
+            previousTool = .eraser
+            tool = back == .none ? .pen : back
+            app.flash(tool.label)
+        } else {
+            toolBeforeEraser = tool
+            previousTool = tool
+            tool = .eraser
+            app.flash("Eraser — double-tap again to go back to \(toolBeforeEraser?.label ?? "pen")")
+        }
+    }
+
     func toggleRuler() {
-        rulerLock.toggle()
-        app.flash(rulerLock ? "Ruler lock on — strokes snap to straight lines" : "Ruler lock off")
+        ruler.on.toggle()
+        if ruler.on {
+            // Bring it onto the current page centre.
+            ruler.x = canvas.w / 2
+            ruler.y = canvas.h / 2
+            app.flash("Drag the ruler to move · turn the end handles to rotate")
+        } else {
+            app.flash("Ruler hidden")
+        }
+    }
+
+    func toggleRulerLock() {
+        ruler.lock.toggle()
+        app.flash(ruler.lock ? "Locked — lines draw parallel or perpendicular to the ruler, anywhere on the page" : "Unlocked — draw along the ruler edge")
+    }
+
+    /// Ruler centre, direction and normal in page coordinates.
+    private func rulerAxes() -> (c: Point, d: Point, n: Point) {
+        let a = ruler.angle * .pi / 180
+        return (Point(ruler.x, ruler.y), Point(cos(a), sin(a)), Point(-sin(a), cos(a)))
     }
 
     // MARK: - Undo / pages
@@ -415,7 +482,6 @@ final class WorkspaceModel {
         app.mutate(docID) { f = $0.placeField(ft, at: p, pageIndex: i) }
         selectedField = f?.id
         tool = .select
-        if type == .markup { sideTab = .forms }
     }
     func editField(_ id: ID, undoable: Bool = false, _ body: @escaping (inout FormField) -> Void) {
         if undoable { app.mutate(docID) { $0.editField(id, pageIndex: self.pageIndex, body) } } else { app.patch(docID) { $0.editField(id, pageIndex: self.pageIndex, body) } }
@@ -467,7 +533,7 @@ final class WorkspaceModel {
     func addFavoritesTab() {
         var s = app.settings
         guard s.favorites.count < 4 else { return }
-        s.favorites.append(FavoritesTab(name: "★ \(s.favorites.count + 1)", pins: ["select"]))
+        s.favorites.append(FavoritesTab(name: "★ \(s.favorites.count + 1)", pins: ["pen"]))
         app.settings = s
         markupTab = .favorites(s.favorites.count - 1)
         renameFavIndex = s.favorites.count - 1
@@ -524,8 +590,9 @@ final class WorkspaceModel {
 
     private func newStroke(_ t: Tool, at p: Point, pressure: Double, isPencil: Bool) -> Stroke {
         let st = style(for: t)
+        // Pen responds to Pencil pressure; Fineliner, Felt tip and Marker keep a constant width.
         var s = Stroke(tool: t, color: st.color, points: [StrokePoint(p.x, p.y, isPencil ? pressure : 0.5)], width: st.width,
-                       weight: (st.pressure ?? false) && isPencil ? .pressure : .constant, opacity: st.opacity, lineStyle: st.lineStyle)
+                       weight: t == .pen && isPencil ? .pressure : .constant, opacity: st.opacity, lineStyle: st.lineStyle)
         if t.isShape { s.fill = st.fill ?? st.color; s.fillPattern = st.fillPattern ?? .none; s.fillOpacity = st.fillOpacity ?? 0.5 }
         if t == .callout { s.fill = st.fill; s.fillPattern = st.fillPattern ?? .none; s.fillOpacity = st.fillOpacity ?? 0.5 }
         if t == .redact { s.color = "#1c1c1e" }
@@ -542,6 +609,12 @@ final class WorkspaceModel {
         dragPage = i
         closePopovers()
         let info = tool.info
+        let isSelectTool = info.kind == .select || info.kind == .lasso
+        // Finger = move the page (a finger tap can still place tap tools). Pencil = the active tool.
+        if info.kind == .none || (!s.isPencil && !isSelectTool) {
+            if type == .journal && journalView == .book { drag = .flip(x0: Double(s.window.x)); flipDx = 0 } else { drag = .pan(last: s.window) }
+            return
+        }
         if type == .drawing, info.isDrag || info.isTap, let L = activeLayerObject, L.locked || !L.visible {
             app.flash(L.locked ? "Active layer is locked" : "Active layer is hidden")
             drag = nil
@@ -549,31 +622,49 @@ final class WorkspaceModel {
         }
         switch info.kind {
         case .none:
-            if type == .journal && journalView == .book { drag = .flip(x0: Double(s.location.x)); flipDx = 0 } else { drag = nil }
+            drag = .pan(last: s.window)
         case .select, .lasso:
             if type == .markup, let f = page.fields.last(where: { $0.frame.contains(p) }), i == pageIndex {
                 selectedField = f.id
                 if f.type.isToggleLike { app.mutate(docID) { $0.editField(f.id, pageIndex: i) { $0.value = $0.isOn ? "" : "on" } } }
-                if type == .markup { sideTab = .forms }
                 drag = nil
                 return
             }
             if i == pageIndex, let hit = topStroke(at: p, page: i) {
-                if !selection.contains(hit.id) { selection = [hit.id]; selectedComment = hit.commentID }
-                drag = .move(start: p, base: currentStrokes)
-            } else if tool == .lasso {
-                drag = .lasso; lasso = [p]
-            } else if type == .journal && journalView == .book {
-                drag = .flip(x0: Double(s.location.x)); flipDx = 0
+                // Tap selects first; a drag only moves something that is already selected.
+                if selection.contains(hit.id) {
+                    drag = .move(start: p, base: currentStrokes)
+                } else {
+                    selection = [hit.id]
+                    selectedComment = hit.commentID
+                    drag = nil
+                }
             } else {
-                drag = .marquee(p); marquee = nil
+                // Drag on empty space: a straight diagonal drag is a box; a curving drag becomes a lasso.
+                drag = .marquee(p)
+                marquee = nil
+                selectPath = [p]
+                lassoMode = false
             }
         case .ink, .highlight, .textMarkup, .shape:
             live = newStroke(tool, at: p, pressure: s.pressure, isPencil: s.isPencil)
             drag = .draw
             selection = []
+            drawMode = .free
+            if tool.kind == .ink, ruler.on {
+                let A = rulerAxes()
+                let vx = p.x - A.c.x, vy = p.y - A.c.y
+                let along = vx * A.d.x + vy * A.d.y, across = vx * A.n.x + vy * A.n.y
+                if ruler.lock {
+                    drawMode = .lock
+                } else if abs(along) <= WorkspaceModel.rulerLength / 2,
+                          abs(across) >= WorkspaceModel.rulerHeight / 2 - 2, abs(across) <= WorkspaceModel.rulerHeight / 2 + 40 {
+                    let sw = style(for: tool).width
+                    drawMode = .edge(offset: (across < 0 ? -1 : 1) * (WorkspaceModel.rulerHeight / 2 + sw / 2 + 1), along0: along)
+                }
+            }
         case .eraser:
-            eraseHits = []
+            eraseSnapshotPending = true
             drag = .erase
             eraseAt(p, page: i)
         case .place, .text, .stampGallery, .stampPreset, .form, .fill:
@@ -595,15 +686,35 @@ final class WorkspaceModel {
             let pt = StrokePoint(p.x, p.y, s.isPencil ? s.pressure : 0.5)
             switch st.tool.kind {
             case .ink:
-                if rulerLock {
-                    let a = st.points[0]
-                    let snapped = snapAngle(from: Point(a.x, a.y), to: p)
-                    st.points = [a, StrokePoint(snapped.x, snapped.y, pt.p)]
-                } else {
+                switch drawMode {
+                case .free:
                     st.points.append(pt)
+                case .edge(let offset, let along0):
+                    let A = rulerAxes()
+                    let half = WorkspaceModel.rulerLength / 2
+                    let along = max(-half, min(half, (p.x - A.c.x) * A.d.x + (p.y - A.c.y) * A.d.y))
+                    func at(_ q: Double) -> StrokePoint {
+                        StrokePoint(A.c.x + A.d.x * q + A.n.x * offset, A.c.y + A.d.y * q + A.n.y * offset, pt.p)
+                    }
+                    st.points = [at(along0), at(along)]
+                case .lock:
+                    let A = rulerAxes()
+                    let a = st.points[0]
+                    let vx = p.x - a.x, vy = p.y - a.y
+                    let pd = vx * A.d.x + vy * A.d.y, pn = vx * A.n.x + vy * A.n.y
+                    let u = abs(pd) >= abs(pn) ? Point(A.d.x * pd, A.d.y * pd) : Point(A.n.x * pn, A.n.y * pn)
+                    st.points = [a, StrokePoint(a.x + u.x, a.y + u.y, pt.p)]
                 }
             case .highlight, .textMarkup:
-                st.points = [st.points[0], StrokePoint(p.x, st.points[0].y, 0.5)]
+                if let f = doc.pdfFile {
+                    // Snap to the PDF's text lines; fall back to a freehand band on pages without text.
+                    let a = st.points[0].point
+                    let rects = app.pdf.textLineRects(file: f, index: doc.pages[i].pdfPageIndex ?? i, from: a, to: p, canvas: canvas)
+                    st.rects = rects.isEmpty ? nil : rects
+                    st.points = [st.points[0], rects.isEmpty ? StrokePoint(p.x, st.points[0].y, 0.5) : pt]
+                } else {
+                    st.points = [st.points[0], StrokePoint(p.x, st.points[0].y, 0.5)]
+                }
             case .shape:
                 if st.tool == .polyline || st.tool == .polygon { st.points.append(pt) } else { st.points = [st.points[0], pt] }
             default: break
@@ -611,7 +722,12 @@ final class WorkspaceModel {
             live = st
         case .marquee(let start):
             dragMoved = true
-            marquee = Rect.from(start, p)
+            if selectPath.last.map({ $0.distance(to: p) >= 2 }) ?? true { selectPath.append(p) }
+            if !lassoMode {
+                let deviation = selectPath.map { Hit.distance($0, toSegment: start, p) }.max() ?? 0
+                if deviation > 14 / zoom { lassoMode = true; marquee = nil }
+            }
+            if lassoMode { lasso = selectPath } else { marquee = Rect.from(start, p) }
         case .lasso:
             dragMoved = true
             if let l = lasso?.last, l.distance(to: p) >= 2 { lasso?.append(p) }
@@ -639,7 +755,13 @@ final class WorkspaceModel {
             eraseAt(p, page: i)
         case .flip(let x0):
             dragMoved = true
-            flipDx = Double(s.location.x) - x0
+            flipDx = Double(s.window.x) - x0
+        case .pan(let last):
+            let dx = s.window.x - last.x, dy = s.window.y - last.y
+            if abs(dx) + abs(dy) > 0 {
+                if dragMoved || abs(dx) + abs(dy) > 3 { dragMoved = true; panBy(CGSize(width: dx, height: dy)) }
+                drag = .pan(last: s.window)
+            }
         }
     }
 
@@ -657,13 +779,20 @@ final class WorkspaceModel {
             if !dragMoved { tap(at: p, page: i) }
         case .marquee:
             let r = marquee
+            let poly = selectPath
             marquee = nil
-            if let r, dragMoved {
+            lasso = nil
+            selectPath = []
+            if lassoMode, dragMoved, poly.count >= 3 {
+                selection = Set(doc.strokes(at: context(page: i)).filter { Hit.polygon(poly, contains: StrokeGeometry.bounds(of: $0).center) }.map(\.id))
+                if !selection.isEmpty { app.flash("\(selection.count) selected") }
+            } else if let r, dragMoved {
                 selection = Set(doc.strokes(at: context(page: i)).filter { r.contains(StrokeGeometry.bounds(of: $0).center) }.map(\.id))
                 if !selection.isEmpty { app.flash("\(selection.count) selected") }
             } else {
                 clearSelection()
             }
+            lassoMode = false
         case .lasso:
             let poly = lasso ?? []
             lasso = nil
@@ -676,12 +805,7 @@ final class WorkspaceModel {
         case .move, .scale:
             break
         case .erase:
-            let hits = eraseHits
-            eraseHits = []
-            if !hits.isEmpty {
-                app.mutate(docID) { $0.removeStrokes(ids: hits, at: self.context(page: i)) }
-                app.flash(hits.count == 1 ? "Annotation erased" : "\(hits.count) annotations erased")
-            }
+            eraseSnapshotPending = false
         case .flip:
             let dx = flipDx
             flipDx = 0
@@ -689,6 +813,10 @@ final class WorkspaceModel {
             let threshold = canvas.w * zoom * 0.3
             if dx < -threshold { if g.nextExists { setPage(g.nextIndex) } else if dx < -threshold * 1.8 { addJournalPage() } }
             else if dx > threshold, g.canBack { setPage(g.prevIndex) }
+            else if !dragMoved, tool.info.isTap || tool.kind == .fill { tap(at: p, page: i) }
+        case .pan:
+            // A finger tap (no movement) still places tap tools.
+            if !dragMoved, tool.info.isTap || tool.kind == .fill { tap(at: p, page: i) }
         }
     }
 
@@ -698,6 +826,8 @@ final class WorkspaceModel {
         live = nil
         lasso = nil
         marquee = nil
+        selectPath = []
+        lassoMode = false
         eraseHits = []
     }
 
@@ -710,20 +840,13 @@ final class WorkspaceModel {
         dragPage = i
     }
 
-    private func snapAngle(from a: Point, to b: Point) -> Point {
-        let dx = b.x - a.x, dy = b.y - a.y
-        let len = (dx * dx + dy * dy).squareRoot()
-        guard len > 0 else { return b }
-        let ang = atan2(dy, dx)
-        let snapped = (ang / (.pi / 4)).rounded() * (.pi / 4)
-        return Point(a.x + cos(snapped) * len, a.y + sin(snapped) * len)
-    }
-
+    /// Partial erase: cuts the touched part out of ink strokes; other annotations go whole.
     private func eraseAt(_ p: Point, page i: Int) {
-        let r = max(6, 12 / zoom)
-        for s in doc.strokes(at: context(page: i)) where !eraseHits.contains(s.id) {
-            if Hit.strokeTouches(s, point: p, radius: r) { eraseHits.insert(s.id) }
-        }
+        let r = max(5, 10 / zoom)
+        let ctx = context(page: i)
+        guard doc.strokes(at: ctx).contains(where: { $0.tool.kind == .ink && Hit.strokeTouches($0, point: p, radius: r) }) else { return }
+        if eraseSnapshotPending { app.mutate(docID) { _ in }; eraseSnapshotPending = false }
+        app.patch(docID) { $0.erase(at: p, radius: r, at: ctx) }
     }
 
     private func commit(_ strokeIn: Stroke, page i: Int) {

@@ -19,17 +19,26 @@ struct WorkspaceView: View {
                     if editor.sidebarOpen && !compact { SidebarView(editor: editor) }
                 }
                 .overlay(alignment: .trailing) {
+                    // Compact width: the sidebar floats over the canvas without a scrim, so you can keep marking up.
                     if editor.sidebarOpen && compact {
-                        ZStack(alignment: .trailing) {
-                            Color.black.opacity(0.28).onTapGesture { editor.sidebarOpen = false }
-                            SidebarView(editor: editor).shadow(color: .black.opacity(0.2), radius: 20)
-                        }
-                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                        SidebarView(editor: editor)
+                            .shadow(color: .black.opacity(0.2), radius: 20)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    if editor.type == .markup, editor.onFormsTab, let fid = editor.selectedField,
+                       let f = editor.page.fields.first(where: { $0.id == fid }) {
+                        FieldInspector(editor: editor, field: f)
+                            .padding(.top, 14)
+                            .padding(.trailing, (editor.sidebarOpen ? editor.sidebarWidth : 0) + 14)
+                            .popIn()
                     }
                 }
                 .overlay { if editor.organizeOpen { OrganizePagesView(editor: editor).transition(.opacity) } }
             }
             .overlay(alignment: .top) { popovers.padding(.top, Metrics.barHeight * 2 + 6) }
+            .overlayPreferenceValue(ToolAnchorKey.self) { anchors in PresetsDropdownHost(editor: editor, anchors: anchors) }
             .overlay(alignment: .topTrailing) {
                 if editor.popover == .export { ExportMenu(editor: editor).padding(.top, Metrics.barHeight - 2).padding(.trailing, 12).popIn() }
             }

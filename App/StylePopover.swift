@@ -7,6 +7,8 @@ struct PresetsRow: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
     var editor: WorkspaceModel
+    /// Inside the style editor a tap only switches presets instead of closing the dropdown.
+    var inEditor = false
 
     var body: some View {
         let tool = editor.styleTool
@@ -34,8 +36,10 @@ struct PresetsRow: View {
                 .frame(width: 30, height: 30)
                 .overlay(Circle().strokeBorder(sel == i ? theme.accent : .clear, lineWidth: 2.5).padding(-4))
                 .contentShape(Circle())
-                .onTapGesture { editor.selectPreset(i) }
+                .onTapGesture { editor.selectPreset(i, closing: !inEditor) }
+                .onLongPressGesture(minimumDuration: Metrics.longPress) { editor.editPreset(i) }
                 .accessibilityLabel("Preset \(i + 1)")
+                .accessibilityHint("Long press to edit")
             }
         }
         .frame(maxWidth: .infinity)
@@ -52,7 +56,7 @@ struct StylePopoverView: View {
     var body: some View {
         let tool = editor.styleTool
         let st = app.styles.current(for: tool)
-        let isText = tool == .textbox, isShape = tool.isShape, isFill = tool == .fill, isPen = tool.isPen
+        let isText = tool == .textbox, isShape = tool.isShape, isFill = tool == .fill
         let isLine = tool.isLineLike
         let target: StylePreset.Target = {
             if isText { return [.color, .border, .background].contains(editor.styleTarget) ? editor.styleTarget : .color }
@@ -63,7 +67,7 @@ struct StylePopoverView: View {
         let range = ToolStyles.widthRange(for: tool)
 
         VStack(alignment: .leading, spacing: 0) {
-            PresetsRow(editor: editor).padding(.bottom, 12)
+            PresetsRow(editor: editor, inEditor: true).padding(.bottom, 12)
 
             if isShape || isText {
                 let opts: [SegmentOption<StylePreset.Target>] = isShape
@@ -101,23 +105,13 @@ struct StylePopoverView: View {
                 SliderRow(label: isText ? "Text size" : (isShape ? "Border thickness" : "Line thickness"),
                           value: Binding(get: { st.width }, set: { v in editor.updateStyle { $0.width = v } }),
                           range: range, step: ToolStyles.widthStep(for: tool),
-                          valueLabel: isText ? "\(Int((10 + st.width).rounded()))pt" : String(format: "%.1fpx", st.width))
+                          valueLabel: isText ? "\(Int((10 + st.width).rounded()))pt" : String(format: "%.1f pt", st.width))
                     .padding(.top, 16)
-            }
-
-            if isPen {
-                SectionLabel(text: "Line weight").padding(.top, 16).padding(.bottom, 8)
-                HStack(spacing: 2) {
-                    pressureOption(label: "Constant", on: !(st.pressure ?? false), color: st.color, pressure: false) { editor.updateStyle { $0.pressure = false } }
-                    pressureOption(label: "Pressure", on: st.pressure ?? false, color: st.color, pressure: true) { editor.updateStyle { $0.pressure = true } }
-                }
-                .padding(2)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(theme.hov))
             }
 
             if isText && target == .border {
                 SliderRow(label: "Border size", value: Binding(get: { st.borderWidth ?? 0 }, set: { v in editor.updateStyle { $0.borderWidth = v } }),
-                          range: 0...6, step: 0.5, valueLabel: String(format: "%.1fpx", st.borderWidth ?? 0))
+                          range: 0...6, step: 0.5, valueLabel: String(format: "%.1f pt", st.borderWidth ?? 0))
                     .padding(.top, 16)
             }
 
@@ -179,27 +173,6 @@ struct StylePopoverView: View {
         if isShape || target == .border { return "Border opacity" }
         if isText { return "Text opacity" }
         return "Opacity"
-    }
-
-    private func pressureOption(label: String, on: Bool, color: String, pressure: Bool, action: @escaping () -> Void) -> some View {
-        VStack(spacing: 4) {
-            Path { p in
-                if pressure {
-                    p.move(to: CGPoint(x: 2, y: 6)); p.addCurve(to: CGPoint(x: 62, y: 6), control1: CGPoint(x: 18, y: 0), control2: CGPoint(x: 44, y: 0))
-                    p.addCurve(to: CGPoint(x: 2, y: 6), control1: CGPoint(x: 44, y: 12), control2: CGPoint(x: 18, y: 12)); p.closeSubpath()
-                } else {
-                    p.addRect(CGRect(x: 2, y: 5, width: 60, height: 2))
-                }
-            }
-            .fill(on ? Color(hex: color) : Color(hex: "#8e8e93"))
-            .frame(width: 64, height: 12)
-            Text(label).font(fnt(11, .bold)).foregroundStyle(on ? theme.ink1 : theme.ink3)
-        }
-        .padding(.top, 7).padding(.bottom, 5).padding(.horizontal, 4)
-        .frame(maxWidth: .infinity)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(on ? theme.card : .clear).shadow(color: on ? Shadows.pill.color : .clear, radius: 1.5, y: 1))
-        .contentShape(Rectangle())
-        .onTapGesture(perform: action)
     }
 }
 

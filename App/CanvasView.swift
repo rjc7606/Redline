@@ -7,13 +7,13 @@ extension WorkspaceModel {
     func renderInput(page i: Int, zoom z: Double, interactive: Bool) -> PageRenderInput {
         let pg = doc.pages[min(i, doc.pages.count - 1)]
         var pdf: UIImage? = nil
-        if type == .markup, let f = doc.pdfFile { pdf = app.pdfImage(file: f, pageIndex: pg.pdfPageIndex ?? i) }
+        if type == .markup, let f = doc.pdfFile { pdf = app.pdfImage(file: f, pageIndex: pg.pdfPageIndex ?? i, canvas: canvas) }
         let showLive = interactive && i == dragPage
         return PageRenderInput(
             page: pg, docType: type, canvas: canvas, transform: pageTransform(page: i), zoom: z, activeLayer: activeLayer,
             live: showLive ? live : nil, selection: interactive && i == pageIndex ? selection : [],
             eraseHits: showLive ? eraseHits : [], highlightComment: interactive ? selectedComment : nil,
-            selectedField: interactive ? selectedField : nil, showFieldTags: interactive && sideTab == .forms,
+            selectedField: interactive ? selectedField : nil, showFieldTags: interactive && onFormsTab,
             lasso: showLive ? lasso : nil, marquee: showLive ? marquee : nil, blueprint: app.settings.blueprint, pdfImage: pdf,
             drawingPaper: doc.paper, accentHex: app.settings.theme == .dark ? "#0A84FF" : "#007AFF", showSelection: interactive)
     }
@@ -55,9 +55,13 @@ struct PageView: View {
                     onUp: { editor.pointerUp($0, page: pageIndex) },
                     onCancel: { editor.pointerCancel() },
                     onPinch: { editor.pinch(by: $0) },
-                    onPan: { editor.panBy($0) }
+                    onPan: { editor.panBy($0) },
+                    onPencilTap: { editor.pencilDoubleTap() }
                 )
                 .frame(width: size.width, height: size.height)
+                if editor.ruler.on, pageIndex == editor.pageIndex {
+                    RulerView(editor: editor, pageIndex: pageIndex)
+                }
                 if pageIndex == editor.pageIndex, editor.selection.count == 1, editor.tool == .select || editor.tool == .lasso,
                    let b = editor.selectionBounds {
                     let hp = editor.viewPoint(fromPage: Point(b.maxX, b.maxY), page: pageIndex)
@@ -95,6 +99,7 @@ struct CanvasInputView: UIViewRepresentable {
     var onCancel: () -> Void
     var onPinch: (Double) -> Void
     var onPan: (CGSize) -> Void
+    var onPencilTap: () -> Void
 
     func makeUIView(context: Context) -> TouchView {
         let v = TouchView()
@@ -104,16 +109,18 @@ struct CanvasInputView: UIViewRepresentable {
     func updateUIView(_ v: TouchView, context: Context) { apply(v) }
     private func apply(_ v: TouchView) {
         v.onDown = onDown; v.onMove = onMove; v.onUp = onUp; v.onCancel = onCancel; v.onPinch = onPinch; v.onPan = onPan
+        v.onPencilTap = onPencilTap
     }
 }
 
-final class TouchView: UIView, UIGestureRecognizerDelegate {
+final class TouchView: UIView, UIGestureRecognizerDelegate, UIPencilInteractionDelegate {
     var onDown: ((PointerSample) -> Void)?
     var onMove: ((PointerSample) -> Void)?
     var onUp: ((PointerSample) -> Void)?
     var onCancel: (() -> Void)?
     var onPinch: ((Double) -> Void)?
     var onPan: ((CGSize) -> Void)?
+    var onPencilTap: (() -> Void)?
 
     private var active: UITouch?
 
@@ -129,8 +136,17 @@ final class TouchView: UIView, UIGestureRecognizerDelegate {
         pan.maximumNumberOfTouches = 2
         pan.delegate = self
         addGestureRecognizer(pan)
+        let pencil = UIPencilInteraction()
+        pencil.delegate = self
+        addInteraction(pencil)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    /// Apple Pencil double-tap (honours the system "Double Tap" preference).
+    func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
+        if UIPencilInteraction.preferredTapAction == .ignore { return }
+        onPencilTap?()
+    }
 
     func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith o: UIGestureRecognizer) -> Bool { true }
 
@@ -149,7 +165,7 @@ final class TouchView: UIView, UIGestureRecognizerDelegate {
     private func sample(_ t: UITouch) -> PointerSample {
         let pencil = t.type == .pencil
         let pressure = pencil && t.maximumPossibleForce > 0 ? Double(t.force / t.maximumPossibleForce) : 0.5
-        return PointerSample(location: t.location(in: self), pressure: min(1, max(0.05, pressure)), isPencil: pencil)
+        return PointerSample(location: t.location(in: self), pressure: min(1, max(0.05, pressure)), isPencil: pencil, window: t.location(in: nil))
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {

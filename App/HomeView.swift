@@ -184,15 +184,41 @@ struct NewDocumentSheet: View {
                                 .foregroundStyle(theme.accent).frame(maxWidth: .infinity).padding(22)
                                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
                         }.buttonStyle(.plain)
-                        Text("or start from the sample plan set below").font(fnt(12)).foregroundStyle(theme.ink4)
+                        Text("or create a new PDF on the paper below").font(fnt(12)).foregroundStyle(theme.ink4)
                     }
                     .fileImporter(isPresented: $importing, allowedContentTypes: [UTType.pdf]) { result in
                         if case .success(let url) = result, let r = app.importPDF(from: url) {
                             app.newDraft?.pdfFile = r.file
                             app.newDraft?.pdfPages = r.pages
+                            app.newDraft?.sheetSize = r.sheetSize
                             if app.newDraft?.name.isEmpty ?? false { app.newDraft?.name = url.deletingPathExtension().lastPathComponent }
                         } else {
                             app.flash("Could not import that PDF")
+                        }
+                    }
+                    if draft.pdfFile == nil {
+                        VStack(alignment: .leading, spacing: 8) {
+                            SectionLabel(text: "Paper")
+                            HStack(spacing: 10) {
+                                ForEach(PageTemplate.allCases, id: \.self) { t in
+                                    let on = draft.template == t
+                                    VStack(spacing: 6) {
+                                        TemplateSwatch(template: t, paper: .white)
+                                            .aspectRatio(draft.landscape ? 1.29 : 0.78, contentMode: .fit)
+                                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(on ? theme.accent : theme.line, lineWidth: 1.5))
+                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.accent.opacity(on ? 0.25 : 0), lineWidth: 6).padding(-3))
+                                        Text(t.label).font(fnt(12, .semibold)).foregroundStyle(on ? theme.accent : theme.ink2)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { app.newDraft?.template = t }
+                                }
+                            }
+                        }
+                        VStack(alignment: .leading, spacing: 8) {
+                            SectionLabel(text: "Orientation")
+                            SegmentControl(options: [SegmentOption(value: false, label: "Portrait"), SegmentOption(value: true, label: "Landscape")],
+                                           selection: Binding(get: { app.newDraft?.landscape ?? false }, set: { app.newDraft?.landscape = $0 }), fontSize: 12.5, vPad: 6, fill: true)
                         }
                     }
                 } else {

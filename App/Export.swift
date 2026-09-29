@@ -16,6 +16,9 @@ enum PDFExporter {
             return write(pdf(editor: editor, pages: Array(doc.pages.indices), mode: mode, report: false), name: "\(base).pdf")
         case .commentReport:
             return write(pdf(editor: editor, pages: Array(doc.pages.indices), mode: .asSeen, report: true), name: "\(base) — annotated.pdf")
+        case .saveToFiles:
+            let data = pdf(editor: editor, pages: Array(doc.pages.indices), mode: .asSeen, report: doc.type == .markup)
+            return write(data, name: "\(base).pdf", directory: AppModel.exportsDirectory)
         case .taggedPDF:
             guard let tag = editor.tagFilter else { return nil }
             let pages = doc.pages.indices.filter { doc.pages[$0].tags.contains(tag) }
@@ -69,10 +72,15 @@ enum PDFExporter {
         }
     }
 
-    private static func write(_ data: Data, name: String) -> URL? {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("RedlineExports", isDirectory: true)
+    private static func write(_ data: Data, name: String, directory: URL? = nil) -> URL? {
+        let dir = directory ?? FileManager.default.temporaryDirectory.appendingPathComponent("RedlineExports", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent(name)
+        var url = dir.appendingPathComponent(name)
+        if directory != nil {
+            var n = 2
+            let stem = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
+            while FileManager.default.fileExists(atPath: url.path) { url = dir.appendingPathComponent("\(stem) \(n).\(ext)"); n += 1 }
+        }
         do { try data.write(to: url, options: .atomic); return url } catch { return nil }
     }
 }

@@ -94,6 +94,8 @@ enum ExportKind: Equatable {
     case png
     case commentReport
     case taggedPDF
+    /// Flattened PDF written to Documents/Exports (visible in the Files app).
+    case saveToFiles
 }
 
 enum LayerMode: Equatable { case asSeen, fullStrength, baseOnly }
@@ -104,18 +106,21 @@ extension WorkspaceModel {
         case .markup: [
             ExportOption(id: "annotated", label: "Annotated PDF", desc: "Flattened marks with the comment list appended", symbol: "doc.text", kind: .commentReport),
             ExportOption(id: "flat", label: "Flattened PDF", desc: "Ink and form values burned in", symbol: "doc.badge.gearshape", kind: .pdf(.asSeen)),
-            ExportOption(id: "png", label: "Image of this page", desc: "PNG at 2×", symbol: "photo", kind: .png)
+            ExportOption(id: "png", label: "Image of this page", desc: "PNG at 2×", symbol: "photo", kind: .png),
+            ExportOption(id: "files", label: "Save to Files", desc: "Flattened PDF in On My iPad › Redline › Exports", symbol: "folder", kind: .saveToFiles)
         ]
         case .drawing: [
             ExportOption(id: "seen", label: "PDF — as seen", desc: "Veils applied, exactly like the screen", symbol: "eye", kind: .pdf(.asSeen)),
             ExportOption(id: "full", label: "PDF — every sheet full strength", desc: "No veils; each trace at 100%", symbol: "square.stack", kind: .pdf(.fullStrength)),
             ExportOption(id: "base", label: "PDF — base only", desc: "Drop all layers", symbol: "doc", kind: .pdf(.baseOnly)),
-            ExportOption(id: "png", label: "Image of this page", desc: "PNG at 2×", symbol: "photo", kind: .png)
+            ExportOption(id: "png", label: "Image of this page", desc: "PNG at 2×", symbol: "photo", kind: .png),
+            ExportOption(id: "files", label: "Save to Files", desc: "PDF in On My iPad › Redline › Exports", symbol: "folder", kind: .saveToFiles)
         ]
         case .journal: [
             ExportOption(id: "book", label: "PDF — whole book", desc: "Every page in order", symbol: "book", kind: .pdf(.asSeen)),
             ExportOption(id: "tagged", label: "PDF — tagged pages", desc: tagFilter.map { "Only pages tagged \"\($0)\"" } ?? "Pick a tag in the Tags panel first", symbol: "tag", kind: .taggedPDF),
-            ExportOption(id: "png", label: "Image of this page", desc: "PNG at 2×", symbol: "photo", kind: .png)
+            ExportOption(id: "png", label: "Image of this page", desc: "PNG at 2×", symbol: "photo", kind: .png),
+            ExportOption(id: "files", label: "Save to Files", desc: "PDF in On My iPad › Redline › Exports", symbol: "folder", kind: .saveToFiles)
         ]
         }
     }
@@ -139,6 +144,10 @@ struct ExportMenu: View {
                 Button {
                     editor.popover = nil
                     if case .taggedPDF = o.kind, editor.tagFilter == nil { app.flash("Pick a tag in the Tags panel first"); return }
+                    if o.kind == .saveToFiles {
+                        if PDFExporter.export(editor: editor, kind: .saveToFiles) != nil { app.flash("Saved to Files › Redline › Exports") } else { app.flash("Export failed") }
+                        return
+                    }
                     if let url = PDFExporter.export(editor: editor, kind: o.kind) { editor.shareURL = url } else { app.flash("Export failed") }
                 } label: {
                     HStack(spacing: 10) {
@@ -267,7 +276,6 @@ struct OrganizePagesView: View {
                     }
                     Menu {
                         Button("Blank Page") { editor.addPage() }
-                        Button("From Template") { app.mutate(editor.docID) { d in d.pages.append(.markup(label: "A-000 Titleblock Template", artwork: "blank")) }; app.flash("Template page added") }
                         Button("Append PDF…") { app.flash("Append PDF — coming soon") }
                         Button("Extract Pages…") { app.flash("Extract pages — coming soon") }
                     } label: {

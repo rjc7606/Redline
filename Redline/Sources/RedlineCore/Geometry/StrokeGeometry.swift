@@ -61,6 +61,9 @@ public enum StrokeGeometry {
             case .dot: dash = [0.1, w * 2.2]
             }
         }
+        if let rects = s.rects, !rects.isEmpty, s.tool.kind == .highlight || s.tool.kind == .textMarkup {
+            return renderTextAnchored(s, rects: rects, width: w, opacity: op, dash: dash)
+        }
         switch s.tool.kind {
         case .ink:
             if s.weight == .pressure, s.points.count > 1 {
@@ -149,6 +152,37 @@ public enum StrokeGeometry {
         default:
             return nil
         }
+    }
+
+    /// Highlight / underline / strike / squiggly snapped to PDF text-line rectangles.
+    static func renderTextAnchored(_ s: Stroke, rects: [Rect], width w: Double, opacity op: Double, dash: [Double]) -> StrokeRender {
+        var path = PathData()
+        switch s.tool {
+        case .highlighter:
+            for r in rects { path.rect(r.insetBy(-1)) }
+            return StrokeRender(path: path, strokeColor: nil, strokeWidth: 0, strokeOpacity: op, fillColor: s.color, fillOpacity: op,
+                                fillPattern: .solid, dash: [], roundCap: false, multiply: true)
+        case .underline:
+            for r in rects { path.move(to: Point(r.minX, r.maxY - 1)); path.line(to: Point(r.maxX, r.maxY - 1)) }
+        case .strike:
+            for r in rects { path.move(to: Point(r.minX, r.center.y)); path.line(to: Point(r.maxX, r.center.y)) }
+        case .squiggly:
+            for r in rects {
+                let y = r.maxY - 1
+                path.move(to: Point(r.minX, y))
+                var x = r.minX
+                var up = true
+                while x < r.maxX {
+                    let nx = min(r.maxX, x + 6)
+                    path.quad(to: Point(nx, y), control: Point((x + nx) / 2, y + (up ? -4 : 4)))
+                    up.toggle(); x = nx
+                }
+            }
+        default:
+            for r in rects { path.rect(r) }
+        }
+        return StrokeRender(path: path, strokeColor: s.color, strokeWidth: max(1.2, min(w * 0.35, 3)), strokeOpacity: op, fillColor: nil,
+                            fillOpacity: 0, fillPattern: .none, dash: dash, roundCap: true, multiply: false)
     }
 
     static func arrowHead(_ path: inout PathData, from a: Point, to b: Point, size: Double) {
