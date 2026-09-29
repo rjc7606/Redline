@@ -10,6 +10,7 @@ final class PDFService {
     private var images: [String: UIImage] = [:]
     private var imageOrder: [String] = []
     private let maxImages = 12
+    private var thumbs: [String: UIImage] = [:]
 
     /// Imported PDFs live in Documents/PDFs so they show up in the Files app.
     static var directory: URL {
@@ -31,6 +32,7 @@ final class PDFService {
 
     func forget(_ file: String) {
         docs[file] = nil
+        for k in thumbs.keys where k.hasPrefix(file + "#") { thumbs[k] = nil }
         for k in images.keys where k.hasPrefix(file + "#") { images[k] = nil }
         imageOrder.removeAll { $0.hasPrefix(file + "#") }
     }
@@ -86,6 +88,30 @@ final class PDFService {
         images[key] = img
         imageOrder.append(key)
         if imageOrder.count > maxImages { let old = imageOrder.removeFirst(); images[old] = nil }
+        return img
+    }
+
+    /// Small (400 px wide) rendering of a page for the home screen tiles.
+    func thumbnail(file: String, index: Int) -> UIImage? {
+        let key = "\(file)#\(index)"
+        if let t = thumbs[key] { return t }
+        guard let page = page(file, index) else { return nil }
+        let disp = PDFService.displaySize(page)
+        guard disp.width > 0, disp.height > 0 else { return nil }
+        let size = CGSize(width: 400, height: (400 * disp.height / disp.width).rounded())
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        fmt.opaque = true
+        let img = UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+            let cg = ctx.cgContext
+            cg.setFillColor(UIColor.white.cgColor)
+            cg.fill(CGRect(origin: .zero, size: size))
+            cg.scaleBy(x: size.width / disp.width, y: size.height / disp.height)
+            cg.translateBy(x: 0, y: disp.height)
+            cg.scaleBy(x: 1, y: -1)
+            page.draw(with: .mediaBox, to: cg)
+        }
+        thumbs[key] = img
         return img
     }
 

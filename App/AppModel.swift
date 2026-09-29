@@ -44,6 +44,12 @@ final class AppModel {
     var settingsPaletteID: ID? = nil
     var settingsSwatch = 0
 
+    /// Home: nil shows the three-tool overview; a type shows that tool's full library.
+    var homeShelf: DocumentType? = nil
+    var homeQuery = ""
+    var homeSort: HomeSort = .recent
+
+
     var newDraft: NewDocumentDraft? = nil
     var pendingDelete: ID? = nil
 

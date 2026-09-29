@@ -60,7 +60,8 @@ struct PageView: View {
                 )
                 .frame(width: size.width, height: size.height)
                 if editor.ruler.on, pageIndex == editor.pageIndex {
-                    RulerView(editor: editor, pageIndex: pageIndex)
+                    // Display only: finger touches on it are routed through the canvas input (Pencil passes through to draw).
+                    RulerView(editor: editor, pageIndex: pageIndex).allowsHitTesting(false)
                 }
                 if pageIndex == editor.pageIndex, editor.selection.count == 1, editor.tool == .select || editor.tool == .lasso,
                    let b = editor.selectionBounds {

@@ -309,6 +309,7 @@ func fixtureData() -> RedlineData {
     #expect(back.settings.author == "Tessa Mahler")
     #expect(back.palettes.palettes.count == 4)
     #expect(Seed.data().docs.isEmpty)
+    #expect(back.settings.fingerDrawingMode == .auto)
 }
 
 // MARK: Journal

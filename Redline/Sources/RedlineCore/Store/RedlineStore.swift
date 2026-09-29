@@ -13,6 +13,11 @@ public struct FavoritesTab: Codable, Sendable, Equatable, Hashable, Identifiable
     public var tools: [Tool] { pins.compactMap { Tool(rawValue: String($0.split(separator: "#")[0])) } }
 }
 
+/// Whether a finger may ink with the pens. `auto` blocks finger inking while an Apple Pencil is in use.
+public enum FingerDrawing: String, Codable, Sendable, CaseIterable, Hashable {
+    case auto = "Auto", always = "Always", never = "Never"
+}
+
 public struct AppSettings: Codable, Sendable, Equatable {
     public var author: String
     public var theme: ThemePreference
@@ -20,6 +25,12 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var favorites: [FavoritesTab]
     /// Sheet appearance for markups: white paper or blueprint blue.
     public var blueprint: Bool
+    /// Optional so older saved settings still decode; see `fingerDrawingMode`.
+    public var fingerDrawing: FingerDrawing?
+    public var fingerDrawingMode: FingerDrawing {
+        get { fingerDrawing ?? .auto }
+        set { fingerDrawing = newValue }
+    }
 
     public init(author: String = "", theme: ThemePreference = .system, shelf: DocumentType = .markup,
                 favorites: [FavoritesTab] = [FavoritesTab(name: "★", pins: ToolCatalog.defaultFavorites.map(\.rawValue))], blueprint: Bool = false) {

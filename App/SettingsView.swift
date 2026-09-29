@@ -74,6 +74,13 @@ struct GeneralSettings: View {
                                selection: Binding(get: { app.settings.theme }, set: { app.settings.theme = $0 }), fontSize: 12.5, vPad: 7, fill: true)
             }
             VStack(alignment: .leading, spacing: 6) {
+                SectionLabel(text: "Finger drawing")
+                SegmentControl(options: FingerDrawing.allCases.map { SegmentOption(value: $0, label: $0.rawValue) },
+                               selection: Binding(get: { app.settings.fingerDrawingMode }, set: { app.settings.fingerDrawingMode = $0 }), fontSize: 12.5, vPad: 7, fill: true)
+                Text("Auto: after you pick a pen, whichever touches the page first decides — a finger first lets fingers ink with that tool; the Pencil first makes fingers pan instead. Picking another tool decides again. A finger can always use every non-ink tool and pans with no tool selected.")
+                    .font(fnt(12)).foregroundStyle(theme.ink3).lineSpacing(2)
+            }
+            VStack(alignment: .leading, spacing: 6) {
                 SectionLabel(text: "Markup sheets")
                 SegmentControl(options: [SegmentOption(value: false, label: "White paper"), SegmentOption(value: true, label: "Blueprint blue")],
                                selection: Binding(get: { app.settings.blueprint }, set: { app.settings.blueprint = $0 }), fontSize: 12.5, vPad: 7, fill: true)

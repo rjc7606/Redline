@@ -2,21 +2,39 @@ import SwiftUI
 import UniformTypeIdentifiers
 import RedlineCore
 
+extension DocumentType {
+    /// Colour that identifies the tool on the home screen.
+    var tint: Color { Color(hex: modeChipHex.fg) }
+    var blurb: String {
+        switch self {
+        case .markup: "PDFs with comments any reader can open. Every mark carries an author and a time."
+        case .drawing: "Multi-page plan sets with trace-paper layers you can veil, lock and flatten."
+        case .journal: "Paged notebooks with paper, templates, tags and a calendar."
+        }
+    }
+    var singular: String {
+        switch self { case .markup: "markup"; case .drawing: "plan set"; case .journal: "notebook" }
+    }
+}
+
+enum HomeSort: String, CaseIterable { case recent = "Recent", name = "Name" }
+
+/// Home: an overview of the three tools, each with its own recents rail, or one tool's full library.
 struct HomeView: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        GeometryReader { geo in
-            let compact = geo.size.width < Metrics.compactThreshold
-            HStack(spacing: 0) {
-                if !compact { HomeNav(compact: false).frame(width: Metrics.homeNav) }
-                VStack(spacing: 0) {
-                    if compact { HomeNav(compact: true) }
-                    ShelfContent()
-                }
+        Group {
+            if let shelf = app.homeShelf {
+                ShelfLibrary(shelf: shelf)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                HomeOverview()
+                    .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
+        .animation(.easeInOut(duration: 0.22), value: app.homeShelf)
         .sheet(isPresented: Binding(get: { app.newDraft != nil }, set: { if !$0 { app.newDraft = nil } })) {
             NewDocumentSheet()
         }
@@ -29,63 +47,195 @@ struct HomeView: View {
     }
 }
 
-struct HomeNav: View {
+// MARK: - Overview (three tool shelves)
+
+struct HomeOverview: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
-    var compact: Bool
 
     var body: some View {
-        if compact {
-            HStack(spacing: 8) {
-                Text("Redline").font(fnt(22, .bold)).foregroundStyle(theme.ink1)
-                Spacer()
-                SegmentControl(options: DocumentType.allCases.map { SegmentOption(value: $0, label: $0.shelfLabel) },
-                               selection: Binding(get: { app.settings.shelf }, set: { app.settings.shelf = $0 }), fontSize: 12.5, vPad: 5, hPad: 10)
-                BarButton(symbol: "gearshape", label: "Settings") { app.openSettings() }
-            }
-            .padding(.horizontal, 16).padding(.top, 12)
-        } else {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Redline").font(fnt(22, .bold)).foregroundStyle(theme.ink1).padding(.horizontal, 10).padding(.top, 6).padding(.bottom, 16)
-                SectionLabel(text: "Shelves").padding(.horizontal, 10).padding(.bottom, 6)
-                ForEach(DocumentType.allCases, id: \.self) { t in
-                    NavRow(label: t.shelfLabel, symbol: t.symbol, active: app.settings.shelf == t, trailing: "\(app.store.count(on: t))") { app.settings.shelf = t }
+        @Bindable var app = app
+        ScrollView {
+            VStack(alignment: .leading, spacing: 28) {
+                HStack(spacing: 12) {
+                    Text("Redline").font(fnt(30, .heavy)).foregroundStyle(theme.ink1)
+                    Spacer()
+                    SearchField(text: $app.homeQuery).frame(maxWidth: 320)
+                    BarButton(symbol: "gearshape", label: "Settings") { app.openSettings() }
                 }
-                Spacer()
-                NavRow(label: "Settings", symbol: "gearshape") { app.openSettings() }
+                ForEach(DocumentType.allCases, id: \.self) { t in
+                    ToolShelf(type: t, query: app.homeQuery)
+                }
             }
-            .padding(.horizontal, 12).padding(.vertical, 18)
-            .frame(maxHeight: .infinity)
-            .background(theme.bg2)
-            .overlay(alignment: .trailing) { Rectangle().fill(theme.line).frame(width: 1) }
+            .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 40)
         }
+        .background(theme.bg)
     }
 }
 
-struct ShelfContent: View {
+/// One tool's band: identity header, New button, and a horizontal rail of recent documents.
+struct ToolShelf: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
+    var type: DocumentType
+    var query: String
 
     var body: some View {
-        let shelf = app.settings.shelf
-        let docs = app.store.documents(on: shelf)
-        ScrollView {
+        let all = app.store.documents(on: type)
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let docs = q.isEmpty ? Array(all.prefix(12)) : all.filter { $0.name.lowercased().contains(q) }
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 14) {
+                Button { open() } label: {
+                    HStack(spacing: 14) {
+                        Image(systemName: type.symbol)
+                            .font(fnt(21, .semibold)).foregroundStyle(type.tint)
+                            .frame(width: 46, height: 46)
+                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(type.tint.opacity(0.14)))
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                Text(type.shelfLabel).font(fnt(22, .bold)).foregroundStyle(theme.ink1)
+                                Text("\(all.count)").font(fnt(12, .bold)).foregroundStyle(theme.ink4)
+                                    .padding(.horizontal, 7).padding(.vertical, 2).background(Capsule().fill(theme.hov))
+                                Image(systemName: "chevron.right").font(fnt(13, .semibold)).foregroundStyle(theme.ink4)
+                            }
+                            Text(type.blurb).font(fnt(12.5)).foregroundStyle(theme.ink3).lineLimit(2)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 8)
+                Button { app.settings.shelf = type; app.newDraft = NewDocumentDraft(type: type) } label: {
+                    HStack(spacing: 7) { Image(systemName: "plus").font(fnt(14, .bold)); Text("New").font(fnt(13.5, .bold)) }
+                        .foregroundStyle(.white).padding(.horizontal, 14).frame(height: 36)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(type.tint))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(type.newLabel)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 18) {
+                    ForEach(docs) { d in
+                        DocTile(doc: d).frame(width: type == .journal ? 150 : 190)
+                    }
+                    if docs.isEmpty {
+                        EmptyShelfCard(type: type, searching: !q.isEmpty) { app.settings.shelf = type; app.newDraft = NewDocumentDraft(type: type) }
+                    } else if q.isEmpty && all.count > docs.count {
+                        Button { open() } label: {
+                            VStack(spacing: 8) {
+                                Image(systemName: "square.grid.2x2").font(fnt(22, .medium))
+                                Text("See all \(all.count)").font(fnt(13, .bold))
+                            }
+                            .foregroundStyle(type.tint)
+                            .frame(width: 150).aspectRatio(type == .journal ? 0.78 : 1.32, contentMode: .fit)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(type.tint.opacity(0.08)))
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(type.tint.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 2).padding(.vertical, 4)
+            }
+        }
+        .padding(18)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(theme.line, lineWidth: 1))
+        .overlay(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 3).fill(type.tint).frame(width: 5).padding(.vertical, 18).offset(x: -1)
+        }
+    }
+
+    private func open() {
+        app.settings.shelf = type
+        app.homeSort = .recent
+        app.homeShelf = type
+    }
+}
+
+struct EmptyShelfCard: View {
+    @Environment(\.theme) private var theme
+    var type: DocumentType
+    var searching: Bool
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: searching ? "magnifyingglass" : "plus").font(fnt(22, .medium))
+                Text(searching ? "No matches" : "Create your first \(type.singular)").font(fnt(13, .bold)).multilineTextAlignment(.center)
+            }
+            .foregroundStyle(searching ? theme.ink4 : type.tint)
+            .frame(width: 190).aspectRatio(1.32, contentMode: .fit)
+            .background(RoundedRectangle(cornerRadius: 8).fill(theme.bg))
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+        }
+        .buttonStyle(.plain)
+        .disabled(searching)
+    }
+}
+
+/// Rounded search field with a magnifier.
+struct SearchField: View {
+    @Environment(\.theme) private var theme
+    @Binding var text: String
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(fnt(14, .semibold)).foregroundStyle(theme.ink4)
+            TextField("Search", text: $text).font(fnt(14)).textFieldStyle(.plain).foregroundStyle(theme.ink1)
+            if !text.isEmpty {
+                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").font(fnt(14)).foregroundStyle(theme.ink4) }.buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12).frame(height: 36)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.bg3))
+    }
+}
+
+// MARK: - One tool's full library
+
+struct ShelfLibrary: View {
+    @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
+    var shelf: DocumentType
+
+    var body: some View {
+        @Bindable var app = app
+        let q = app.homeQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        var docs = app.store.documents(on: shelf).filter { q.isEmpty || $0.name.lowercased().contains(q) }
+        if app.homeSort == .name { docs.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending } }
+        return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack(spacing: 12) {
+                    Button { app.homeShelf = nil } label: {
+                        HStack(spacing: 2) { Image(systemName: "chevron.left").font(fnt(17, .semibold)); Text("Home").font(fnt(15)) }
+                            .foregroundStyle(theme.accent)
+                    }.buttonStyle(.plain)
+                    Image(systemName: shelf.symbol).font(fnt(19, .semibold)).foregroundStyle(shelf.tint)
+                        .frame(width: 40, height: 40)
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(shelf.tint.opacity(0.14)))
                     Text(shelf.shelfLabel).font(fnt(30, .heavy)).foregroundStyle(theme.ink1)
                     Spacer()
-                    PrimaryButton(label: shelf.newLabel, symbol: "plus") { app.newDraft = NewDocumentDraft(type: shelf) }
+                    SearchField(text: $app.homeQuery).frame(maxWidth: 260)
+                    SegmentControl(options: HomeSort.allCases.map { SegmentOption(value: $0, label: $0.rawValue) }, selection: $app.homeSort, fontSize: 12.5, vPad: 6, hPad: 12)
+                    Button { app.settings.shelf = shelf; app.newDraft = NewDocumentDraft(type: shelf) } label: {
+                        HStack(spacing: 7) { Image(systemName: "plus").font(fnt(14, .bold)); Text(shelf.newLabel).font(fnt(13.5, .bold)) }
+                            .foregroundStyle(.white).padding(.horizontal, 14).frame(height: 36)
+                            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(shelf.tint))
+                    }.buttonStyle(.plain)
+                    BarButton(symbol: "gearshape", label: "Settings") { app.openSettings() }
                 }
                 if docs.isEmpty {
-                    Text("Nothing on this shelf yet.").font(fnt(14)).foregroundStyle(theme.ink4).frame(maxWidth: .infinity).padding(.vertical, 60)
+                    Text(q.isEmpty ? "Nothing here yet." : "No \(shelf.shelfLabel.lowercased()) match \"\(app.homeQuery)\".")
+                        .font(fnt(14)).foregroundStyle(theme.ink4).frame(maxWidth: .infinity).padding(.vertical, 60)
                 } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 22)], spacing: 26) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: shelf == .journal ? 150 : 190), spacing: 22)], spacing: 26) {
                         ForEach(docs) { d in DocTile(doc: d) }
                     }
                 }
             }
-            .padding(.horizontal, 34).padding(.vertical, 26)
+            .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 40)
         }
+        .background(theme.bg)
     }
 }
 
@@ -103,7 +253,7 @@ struct DocTile: View {
                         .background(Circle().fill(Color.white.opacity(0.85)))
                 }.buttonStyle(.plain).padding(6).opacity(0.5)
             }
-            .aspectRatio(doc.type == .journal ? 0.78 : 1.32, contentMode: .fit)
+            .aspectRatio(tileAspect, contentMode: .fit)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line, lineWidth: 1))
             .shadow(color: .black.opacity(0.14), radius: 2, y: 1)
@@ -120,14 +270,26 @@ struct DocTile: View {
         }
     }
 
+    /// Markup tiles take the shape of the document's first page.
+    private var tileAspect: CGFloat {
+        switch doc.type {
+        case .journal: 0.78
+        case .drawing: 1.32
+        case .markup: CGFloat(max(0.5, min(2.0, doc.canvasSize.w / doc.canvasSize.h)))
+        }
+    }
+
     @ViewBuilder
     private var thumbnail: some View {
         switch doc.type {
         case .markup:
             ZStack(alignment: .bottomLeading) {
                 Color.white
-                GlyphView(d: "M8 8h184v125H8zM168 8v125M30 30h110v80H30zM85 30v45M30 75h55", size: 200, color: Color(hex: "#22405f"))
-                    .scaleEffect(0.9)
+                if let f = doc.pdfFile, let img = app.pdf.thumbnail(file: f, index: doc.pages.first?.pdfPageIndex ?? 0) {
+                    Image(uiImage: img).resizable().scaledToFill()
+                } else if let first = doc.pages.first {
+                    TemplateSwatch(template: first.template, paper: .white)
+                }
                 badge("bubble.left", Formatting.plural(doc.comments.count, "comment"))
                 Text("PDF").font(fnt(9, .heavy)).tracking(0.5).foregroundStyle(.white).padding(.horizontal, 5).padding(.vertical, 2)
                     .background(RoundedRectangle(cornerRadius: 3).fill(Color(hex: "#e8483f")))

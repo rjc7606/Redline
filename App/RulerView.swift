@@ -1,15 +1,13 @@
 import SwiftUI
 import RedlineCore
 
-/// On-page ruler: drag to move, turn the end handles to rotate (snaps every 15°), Lock makes every
-/// stroke parallel or perpendicular to it anywhere on the page. Pens draw along its edge when a stroke
-/// starts next to it. Position and angle are in page coordinates.
+/// On-page ruler (display only — WorkspaceModel handles the finger gestures): drag to move, drag the end
+/// handles to rotate (snaps every 15°), tap the centre pill to lock. Pens draw along its edge when a stroke
+/// starts next to it; with Lock on every stroke is parallel or perpendicular to it. Page coordinates.
 struct RulerView: View {
     @Environment(\.theme) private var theme
     var editor: WorkspaceModel
     var pageIndex: Int
-    @State private var moveBase: Point? = nil
-    @State private var rotBase: (a0: Double, r0: Double)? = nil
 
     var body: some View {
         let r = editor.ruler
@@ -49,35 +47,20 @@ struct RulerView: View {
             .padding(.horizontal, 8)
             HStack(spacing: 8) {
                 Text("\(deg)°").font(fnt(15, .bold)).monospacedDigit().foregroundStyle(theme.ink1).frame(minWidth: 40, alignment: .trailing)
-                Button { editor.toggleRulerLock() } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: r.lock ? "lock.fill" : "lock.open").font(fnt(12, .bold))
-                        Text(r.lock ? "Locked" : "Lock").font(fnt(12, .bold))
-                    }
-                    .foregroundStyle(r.lock ? .white : theme.ink2)
-                    .padding(.horizontal, 11).frame(height: 28)
-                    .background(Capsule().fill(r.lock ? theme.accent : theme.card))
-                    .overlay(Capsule().stroke(r.lock ? theme.accent : theme.line2, lineWidth: 1))
+                HStack(spacing: 6) {
+                    Image(systemName: r.lock ? "lock.fill" : "lock.open").font(fnt(12, .bold))
+                    Text(r.lock ? "Locked" : "Lock").font(fnt(12, .bold))
                 }
-                .buttonStyle(.plain)
+                .foregroundStyle(r.lock ? .white : theme.ink2)
+                .padding(.horizontal, 11).frame(height: 28)
+                .background(Capsule().fill(r.lock ? theme.accent : theme.card))
+                .overlay(Capsule().stroke(r.lock ? theme.accent : theme.line2, lineWidth: 1))
             }
             .rotationEffect(.degrees(r.angle > 90 ? 180 : 0))
         }
         .frame(width: L, height: H)
         .rotationEffect(.degrees(r.angle + pageRot))
         .position(center)
-        .gesture(
-            DragGesture(minimumDistance: 1, coordinateSpace: .named(space))
-                .onChanged { v in
-                    let base = moveBase ?? Point(editor.ruler.x, editor.ruler.y)
-                    if moveBase == nil { moveBase = base }
-                    let a = editor.pagePoint(fromView: v.startLocation, page: pageIndex)
-                    let b = editor.pagePoint(fromView: v.location, page: pageIndex)
-                    editor.ruler.x = base.x + (b.x - a.x)
-                    editor.ruler.y = base.y + (b.y - a.y)
-                }
-                .onEnded { _ in moveBase = nil }
-        )
         .accessibilityLabel("Ruler")
     }
 
@@ -88,21 +71,5 @@ struct RulerView: View {
             .background(Circle().fill(theme.card))
             .overlay(Circle().stroke(theme.line2, lineWidth: 1))
             .frame(width: 44, height: 44)
-            .contentShape(Circle())
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 0, coordinateSpace: .named(space))
-                    .onChanged { v in
-                        let p = editor.pagePoint(fromView: v.location, page: pageIndex)
-                        let ang = atan2(p.y - editor.ruler.y, p.x - editor.ruler.x) * 180 / .pi
-                        let base = rotBase ?? (a0: ang, r0: editor.ruler.angle)
-                        if rotBase == nil { rotBase = base }
-                        var na = ang - base.a0 + base.r0
-                        na = (na.truncatingRemainder(dividingBy: 180) + 180).truncatingRemainder(dividingBy: 180)
-                        let snapped = (na / 15).rounded() * 15
-                        if abs(na - snapped) < 2.5 { na = snapped.truncatingRemainder(dividingBy: 180) }
-                        editor.ruler.angle = na
-                    }
-                    .onEnded { _ in rotBase = nil }
-            )
     }
 }

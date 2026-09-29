@@ -48,7 +48,10 @@ swift test
 - On PDF pages the highlighter, underline, strikethrough and squiggly tools snap to the page's text
   lines (PDFKit selection); pages without text fall back to a freehand band.
 - The Pen responds to Apple Pencil pressure; Fineliner, Felt tip and Marker draw at a constant width.
-- A finger moves the page (pan, or flip in notebooks) and can place tap tools; the Apple Pencil draws.
+- With no tool selected a finger moves the page (locked to the first direction it moves; two fingers pan freely
+  and pinch to zoom). After a pen is picked, the first touch decides: a finger first lets fingers ink; the Pencil
+  first makes fingers pan. Every other tool works with a finger. Settings › Finger drawing overrides this
+  (Auto / Always / Never). Only fingers move or rotate the ruler; Pencil touches over it draw.
   The Select tool (pinned beside Organize Pages) selects with a tap, a diagonal box drag, or a lasso.
 - The eraser cuts only the touched part out of ink strokes. Double-tapping an Apple Pencil switches
   to the eraser and back (it follows the system Pencil "Double Tap" setting).

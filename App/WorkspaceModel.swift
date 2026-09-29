@@ -73,6 +73,9 @@ final class WorkspaceModel {
     var eraseHits: Set<ID> = []
     /// Tool to return to after a Pencil double-tap switched to the eraser.
     var toolBeforeEraser: Tool? = nil
+    /// Decided by the first touch after an ink tool is picked: finger first → fingers may ink; Pencil first → fingers pan.
+    /// nil until that first touch. Reset when the tool changes (not when presets change).
+    var fingerInkAllowed: Bool? = nil
     private var previousTool: Tool = .pen
     private var eraseSnapshotPending = false
 
@@ -121,8 +124,11 @@ final class WorkspaceModel {
     var isCompact = false
 
     private enum Drag {
-        case draw, marquee(Point), lasso, move(start: Point, base: [Stroke]), scale(center: Point, d0: Double, base: [Stroke]), erase, flip(x0: Double), pan(last: CGPoint)
+        case draw, marquee(Point), lasso, move(start: Point, base: [Stroke]), scale(center: Point, d0: Double, base: [Stroke]), erase, flip(x0: Double), pan(start: CGPoint, last: CGPoint, axis: PanAxis?)
+        case rulerMove(start: Point, baseX: Double, baseY: Double), rulerRotate(a0: Double, r0: Double), rulerTap
     }
+    /// Single-finger panning locks to the direction of the first movement.
+    private enum PanAxis { case horizontal, vertical }
     private var drag: Drag? = nil
     private var dragMoved = false
     /// Points of the current selection drag; becomes a lasso once the path stops being a straight diagonal.
@@ -136,7 +142,7 @@ final class WorkspaceModel {
         self.docID = docID
         let d = app.store.document(docID)!
         switch d.type {
-        case .markup: tool = .select; sideTab = .comments
+        case .markup: tool = .none; sideTab = .comments
         case .drawing: tool = .pen; sideTab = .layers
         case .journal: tool = .pen; sideTab = .pages
         }
@@ -238,24 +244,28 @@ final class WorkspaceModel {
     func zoomIn() { zoom = min(Metrics.maxZoom, ((zoom + 0.1) * 100).rounded() / 100) }
     func zoomOut() { zoom = max(Metrics.minZoom, ((zoom - 0.1) * 100).rounded() / 100) }
     func pinch(by factor: Double) { zoom = min(Metrics.maxZoom, max(Metrics.minZoom, zoom * factor)) }
-    func panBy(_ d: CGSize) { pan = CGSize(width: pan.width + d.width, height: pan.height + d.height) }
+    func panBy(_ d: CGSize) {
+        pan = CGSize(width: pan.width + d.width, height: pan.height + d.height)
+        session = nil
+    }
 
     // MARK: - Tools
 
     func pick(_ t: Tool) {
         let info = t.info
         closePopovers()
-        if info.kind == .flash { tool = t; app.flash(info.message ?? ""); return }
+        if info.kind == .flash { tool = t; presetsTool = nil; app.flash(info.message ?? ""); return }
         if info.kind == .pageAction { rotatePage(at: pageIndex); return }
         if info.kind == .stampGallery {
             tool = .stamps
+            presetsTool = nil
             popover = popover == .stamps ? nil : .stamps
             selection = []
             return
         }
         if tool == t {
-            // Tapping the active tool deselects it and closes its presets.
-            tool = type == .markup ? .select : .none
+            // Tapping the active tool deselects it and closes its presets; no tool = pan with a finger or Pencil.
+            tool = .none
             session = nil
             presetsTool = nil
             styleExpanded = false
@@ -264,20 +274,29 @@ final class WorkspaceModel {
         let keepSession = t.isPen && (tool.isPen || tool == .eraser || tool == .none)
         previousTool = tool
         tool = t
+        fingerInkAllowed = nil
         if t != .eraser { toolBeforeEraser = nil }
         if !keepSession { session = nil }
         if t != .select && t != .lasso { selection = []; selectedField = nil }
-        // Tools with presets drop their four presets down under the button.
-        if t.hasPresets { presetsTool = t; styleExpanded = false; styleTarget = .color }
+        // Tools with presets keep their four presets visible under the button while selected.
+        presetsTool = t.hasPresets ? t : nil
+        styleExpanded = false
+        styleTarget = .color
         if let h = ToolCatalog.pickHint(for: t, rulerLocked: ruler.on && ruler.lock) { app.flash(h) }
     }
 
+    /// Closes transient popovers. The presets row under the active tool stays; only the expanded editor collapses.
     func closePopovers() {
-        presetsTool = nil
         styleExpanded = false
         popover = nil
         layerMenu = nil
         tagPopoverPage = nil
+    }
+
+    /// Hides the presets row too (tool deselected or switched to a tool without presets).
+    func closeAllPopovers() {
+        closePopovers()
+        presetsTool = nil
     }
 
     /// Tap on a preset: use it and close the dropdown (inside the editor it only switches presets).
@@ -312,11 +331,13 @@ final class WorkspaceModel {
             toolBeforeEraser = nil
             previousTool = .eraser
             tool = back == .none ? .pen : back
+            fingerInkAllowed = nil
             app.flash(tool.label)
         } else {
             toolBeforeEraser = tool
             previousTool = tool
             tool = .eraser
+            fingerInkAllowed = nil
             app.flash("Eraser — double-tap again to go back to \(toolBeforeEraser?.label ?? "pen")")
         }
     }
@@ -342,6 +363,35 @@ final class WorkspaceModel {
     private func rulerAxes() -> (c: Point, d: Point, n: Point) {
         let a = ruler.angle * .pi / 180
         return (Point(ruler.x, ruler.y), Point(cos(a), sin(a)), Point(-sin(a), cos(a)))
+    }
+
+    private enum RulerHit { case body, handle, lock }
+
+    /// Which part of the ruler a page point is on, if any (hit sizes are in screen points).
+    private func rulerHit(_ p: Point) -> RulerHit? {
+        guard ruler.on else { return nil }
+        let A = rulerAxes()
+        let vx = p.x - A.c.x, vy = p.y - A.c.y
+        let along = vx * A.d.x + vy * A.d.y, across = vx * A.n.x + vy * A.n.y
+        let halfL = WorkspaceModel.rulerLength / 2, halfH = WorkspaceModel.rulerHeight / 2
+        guard abs(along) <= halfL, abs(across) <= halfH else { return nil }
+        let handleR = 22 / zoom
+        let handleX = halfL - 30 / zoom
+        if abs(abs(along) - handleX) <= handleR && abs(across) <= handleR { return .handle }
+        if abs(along) <= 72 / zoom && abs(across) <= 16 / zoom { return .lock }
+        return .body
+    }
+
+    /// May a finger ink right now? First touch after picking an ink tool decides in Auto mode.
+    private func fingerMayInk(deciding isPencil: Bool) -> Bool {
+        switch app.settings.fingerDrawingMode {
+        case .always: return true
+        case .never: return false
+        case .auto:
+            if UIPencilInteraction.prefersPencilOnlyDrawing { return false }
+            if fingerInkAllowed == nil { fingerInkAllowed = !isPencil }
+            return fingerInkAllowed ?? true
+        }
     }
 
     // MARK: - Undo / pages
@@ -609,10 +659,24 @@ final class WorkspaceModel {
         dragPage = i
         closePopovers()
         let info = tool.info
-        let isSelectTool = info.kind == .select || info.kind == .lasso
-        // Finger = move the page (a finger tap can still place tap tools). Pencil = the active tool.
-        if info.kind == .none || (!s.isPencil && !isSelectTool) {
-            if type == .journal && journalView == .book { drag = .flip(x0: Double(s.window.x)); flipDx = 0 } else { drag = .pan(last: s.window) }
+        // Any touch with a non-select tool deselects the current comment / selection.
+        if info.kind != .select && info.kind != .lasso { selectedComment = nil; selection = []; selectedField = nil }
+        // Finger on the ruler: move it, rotate it (end handles) or toggle Lock (centre). The Pencil passes through.
+        if !s.isPencil, let hit = rulerHit(p) {
+            switch hit {
+            case .body: drag = .rulerMove(start: p, baseX: ruler.x, baseY: ruler.y)
+            case .handle: drag = .rulerRotate(a0: atan2(p.y - ruler.y, p.x - ruler.x) * 180 / .pi, r0: ruler.angle)
+            case .lock: drag = .rulerTap
+            }
+            return
+        }
+        // No tool = move the page. Whoever touches first after picking an ink tool decides whether fingers ink or pan.
+        let fingerBlocked = !s.isPencil && info.kind == .ink && !fingerMayInk(deciding: false)
+        if s.isPencil, info.kind == .ink { _ = fingerMayInk(deciding: true) }
+        if info.kind == .none || fingerBlocked {
+            // Panning with a finger ends the current ink comment chain.
+            session = nil
+            if type == .journal && journalView == .book { drag = .flip(x0: Double(s.window.x)); flipDx = 0 } else { drag = .pan(start: s.window, last: s.window, axis: nil) }
             return
         }
         if type == .drawing, info.isDrag || info.isTap, let L = activeLayerObject, L.locked || !L.visible {
@@ -622,7 +686,7 @@ final class WorkspaceModel {
         }
         switch info.kind {
         case .none:
-            drag = .pan(last: s.window)
+            drag = .pan(start: s.window, last: s.window, axis: nil)
         case .select, .lasso:
             if type == .markup, let f = page.fields.last(where: { $0.frame.contains(p) }), i == pageIndex {
                 selectedField = f.id
@@ -756,12 +820,32 @@ final class WorkspaceModel {
         case .flip(let x0):
             dragMoved = true
             flipDx = Double(s.window.x) - x0
-        case .pan(let last):
-            let dx = s.window.x - last.x, dy = s.window.y - last.y
-            if abs(dx) + abs(dy) > 0 {
-                if dragMoved || abs(dx) + abs(dy) > 3 { dragMoved = true; panBy(CGSize(width: dx, height: dy)) }
-                drag = .pan(last: s.window)
+        case .rulerMove(let start, let baseX, let baseY):
+            dragMoved = true
+            ruler.x = baseX + (p.x - start.x)
+            ruler.y = baseY + (p.y - start.y)
+        case .rulerRotate(let a0, let r0):
+            dragMoved = true
+            let ang = atan2(p.y - ruler.y, p.x - ruler.x) * 180 / .pi
+            var na = ang - a0 + r0
+            na = (na.truncatingRemainder(dividingBy: 180) + 180).truncatingRemainder(dividingBy: 180)
+            let snapped = (na / 15).rounded() * 15
+            if abs(na - snapped) < 2.5 { na = snapped.truncatingRemainder(dividingBy: 180) }
+            ruler.angle = na
+        case .rulerTap:
+            break
+        case .pan(let start, let last, let axisIn):
+            var axis = axisIn
+            if axis == nil {
+                // Lock to the first clear direction the finger moves in.
+                let tx = s.window.x - start.x, ty = s.window.y - start.y
+                if abs(tx) + abs(ty) < 4 { return }
+                axis = abs(tx) >= abs(ty) ? .horizontal : .vertical
             }
+            let dx = axis == .horizontal ? s.window.x - last.x : 0
+            let dy = axis == .vertical ? s.window.y - last.y : 0
+            if dx != 0 || dy != 0 { dragMoved = true; panBy(CGSize(width: dx, height: dy)) }
+            drag = .pan(start: start, last: s.window, axis: axis)
         }
     }
 
@@ -817,6 +901,10 @@ final class WorkspaceModel {
         case .pan:
             // A finger tap (no movement) still places tap tools.
             if !dragMoved, tool.info.isTap || tool.kind == .fill { tap(at: p, page: i) }
+        case .rulerTap:
+            toggleRulerLock()
+        case .rulerMove, .rulerRotate:
+            break
         }
     }
 
@@ -864,8 +952,8 @@ final class WorkspaceModel {
         var cid: ID? = nil
         app.mutate(docID) { cid = $0.addStroke(st, at: self.context(page: i), author: author, session: sess) }
         if type == .markup {
+            // Ink strokes chain into one comment; the comment is not selected while you draw.
             if st.tool.kind == .ink { session = cid } else { session = nil }
-            selectedComment = cid
         }
     }
 
@@ -928,7 +1016,7 @@ final class WorkspaceModel {
             if !selection.isEmpty { deleteSelection(); return true }
             return false
         }
-        if ch == KeyEquivalent.escape.character { closePopovers(); clearSelection(); organizeOpen = false; flatten = nil; return true }
+        if ch == KeyEquivalent.escape.character { closeAllPopovers(); clearSelection(); organizeOpen = false; flatten = nil; return true }
         if !mod && ch == "v" { tool = .select; return true }
         if !mod && ch == "e" { tool = .eraser; return true }
         if type == .journal && journalView == .book {
