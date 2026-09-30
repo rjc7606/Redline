@@ -60,7 +60,7 @@ extension PDFAnnotation {
     }
 
     /// Forgets the stored appearance so PDFKit re-renders from the properties (used after an edit).
-    func dropAppearance() { removeValue(forAnnotationKey: .appearanceStreams) }
+    func dropAppearance() { removeValue(forAnnotationKey: .appearanceDictionary) }
 }
 
 enum PDFColors {
