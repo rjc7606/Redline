@@ -69,7 +69,7 @@ struct StampGalleryView: View {
                 }
             }
             HStack(spacing: 6) {
-                ForEach(Spectrum.quickPalette, id: \.self) { c in
+                ForEach(ToolStyles.quickPalette, id: \.self) { c in
                     Circle().fill(Color(hex: c)).frame(width: 20, height: 20)
                         .overlay(Circle().stroke(theme.accent, lineWidth: HexColor.same(c, draftColor) ? 2 : 0).padding(-3))
                         .overlay(Circle().stroke(Color.black.opacity(0.1), lineWidth: 1))
