@@ -113,28 +113,28 @@ public struct ToolStyles: Codable, Sendable, Equatable {
         switch tool {
         case .pen: Default(color: "#1c1c1e", width: 2.4, opacity: nil)
         case .fineliner: Default(color: "#1c1c1e", width: 1.3, opacity: nil)
-        case .felt: Default(color: "#e8483f", width: 4.2, opacity: nil)
+        case .felt: Default(color: "#E0332A", width: 4.2, opacity: nil)
         case .marker: Default(color: "#ffd60a", width: 14, opacity: 0.55)
         case .highlighter: Default(color: "#ffd60a", width: 22, opacity: 0.4)
-        case .textbox: Default(color: "#e8483f", width: 6, opacity: nil)
+        case .textbox: Default(color: "#E0332A", width: 6, opacity: nil)
         case .note: Default(color: "#FFCC00", width: 2.5, opacity: nil)
         case .signature: Default(color: "#1c1c1e", width: 2.5, opacity: nil)
         case .fill: Default(color: "#FFCC00", width: 0, opacity: 0.5)
         case .check: Default(color: "#34C759", width: 4, opacity: nil)
         case .xmark: Default(color: "#FF3B30", width: 4, opacity: nil)
         case .eraser: Default(color: "#8e8e93", width: 12, opacity: nil)
-        default: Default(color: "#e8483f", width: 2.5, opacity: nil)
+        default: Default(color: "#E0332A", width: 2.5, opacity: nil)
         }
     }
 
     /// The four preset colours for a tool.
     public static func presetColors(for tool: Tool) -> [String] {
         switch tool {
-        case .pen, .fineliner, .signature: ["#1c1c1e", "#e8483f", "#007AFF", "#34C759"]
+        case .pen, .fineliner, .signature: ["#1c1c1e", "#E0332A", "#007AFF", "#34C759"]
         case .marker, .highlighter: ["#ffd60a", "#ff6fa8", "#34C759", "#007AFF"]
         case .fill, .note: ["#FFCC00", "#FF3B30", "#007AFF", "#34C759"]
-        case .check: ["#34C759", "#e8483f", "#007AFF", "#FF9500"]
-        default: ["#e8483f", "#1c1c1e", "#007AFF", "#FF9500"]
+        case .check: ["#34C759", "#E0332A", "#007AFF", "#FF9500"]
+        default: ["#E0332A", "#1c1c1e", "#007AFF", "#FF9500"]
         }
     }
 
@@ -184,7 +184,7 @@ public struct ToolStyles: Codable, Sendable, Equatable {
     }
 
     /// Quick palette shown as the 12-column grid header row in the Style Popover.
-    public static let quickPalette: [String] = ["#1c1c1e", "#6d6d72", "#ffffff", "#e8483f", "#FF9500", "#ffd60a", "#34C759", "#00a3a3", "#007AFF", "#5856D6", "#AF52DE", "#ff6fa8"]
+    public static let quickPalette: [String] = ["#1c1c1e", "#6d6d72", "#ffffff", "#E0332A", "#FF9500", "#ffd60a", "#34C759", "#00a3a3", "#007AFF", "#5856D6", "#AF52DE", "#ff6fa8"]
 }
 
 /// A 12×10 spectrum grid (greys row + 9 hue rows) used by colour pickers.

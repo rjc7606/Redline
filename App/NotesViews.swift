@@ -19,7 +19,7 @@ struct BookView: View {
             .frame(minHeight: 34)
             GeometryReader { geo in
                 ZStack {
-                    theme.canvas
+                    GrainBackground(color: theme.canvas)
                     HStack(spacing: 0) {
                         ForEach(g.visiblePages, id: \.self) { i in
                             PageView(editor: editor, pageIndex: i)
@@ -113,7 +113,7 @@ struct TagRow: View {
             ForEach(pg.tags, id: \.self) { t in
                 HStack(spacing: 4) {
                     Text(t).font(fnt(11.5, .bold))
-                    Button { editor.removeTag(t, page: pageIndex) } label: { Text("×").font(fnt(12, .heavy)).opacity(0.6) }.buttonStyle(.plain)
+                    Button { editor.removeTag(t, page: pageIndex) } label: { Text("×").font(fnt(12, .bold)).opacity(0.6) }.buttonStyle(.plain)
                 }
                 .foregroundStyle(theme.accent).padding(.horizontal, 10).frame(height: 26)
                 .background(Capsule().fill(theme.accent.opacity(0.12)))
@@ -157,7 +157,7 @@ struct CalendarView: View {
         VStack(spacing: 14) {
             HStack(spacing: 10) {
                 BarButton(symbol: "chevron.left", label: "Previous month", size: 32) { editor.calOffset -= 1 }
-                Text(month.title).font(fnt(20, .heavy)).foregroundStyle(theme.ink1).frame(minWidth: 180, alignment: .leading)
+                Text(month.title).font(titleFnt(20)).foregroundStyle(theme.ink1).frame(minWidth: 180, alignment: .leading)
                 BarButton(symbol: "chevron.right", label: "Next month", size: 32) { editor.calOffset += 1 }
                 Spacer()
                 SegmentControl(options: DateMode.allCases.map { SegmentOption(value: $0, label: $0.rawValue) },
@@ -176,7 +176,7 @@ struct CalendarView: View {
                                 let pg = editor.doc.pages[i]
                                 ZStack(alignment: .bottom) {
                                     RoundedRectangle(cornerRadius: 3).fill(Color(hex: pg.paper.hex))
-                                    Text(i == 0 ? "C" : "\(i)").font(fnt(8, .heavy)).foregroundStyle(Color.black.opacity(0.5)).padding(.bottom, 2)
+                                    Text("\(i)").font(fnt(8, .bold)).foregroundStyle(Color.black.opacity(0.5)).padding(.bottom, 2)
                                 }
                                 .frame(width: 28, height: 36)
                                 .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)

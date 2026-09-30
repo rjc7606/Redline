@@ -72,7 +72,7 @@ struct DocTile<Extra: View>: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     if doc.isFavorite { Image(systemName: "star.fill").font(fnt(10)).foregroundStyle(Color(hex: "#FF9500")) }
-                    Text(doc.name).font(fnt(13, .semibold)).foregroundStyle(theme.ink1).lineLimit(1).truncationMode(.middle)
+                    Text(doc.name).font(fnt(13, .medium)).foregroundStyle(theme.ink1).lineLimit(1).truncationMode(.middle)
                 }
                 Text(meta).font(fnt(11.5, .medium)).foregroundStyle(theme.ink4).lineLimit(1)
                 if showFolder {
@@ -113,7 +113,7 @@ struct DocTile<Extra: View>: View {
                 .frame(width: Metrics.docTile, height: (Metrics.docTile / pageAspect).rounded())
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(theme.line, lineWidth: 1))
-                .shadow(color: Shadows.pill.color, radius: Shadows.pill.radius, y: Shadows.pill.y)
+                .pageShadow(theme)
         case .drawing:
             // Page stack: three sheets offset 3 pt, the front one rendered.
             let w = Metrics.docTile - 6, h = ((Metrics.docTile - 6) / pageAspect).rounded()
@@ -129,20 +129,18 @@ struct DocTile<Extra: View>: View {
                     .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(theme.line, lineWidth: 1))
             }
             .frame(width: Metrics.docTile, height: h + 6, alignment: .topLeading)
-            .shadow(color: Shadows.pill.color, radius: Shadows.pill.radius, y: Shadows.pill.y)
+            .pageShadow(theme)
         case .journal:
-            let paper = doc.pages.first?.paper ?? .cream
-            let fg = paper.isDark ? Color(hex: "#f2f2f7") : Color(hex: "#1c1c1e")
+            // The cover page, rendered with its styling and ink, is the thumbnail (GoodNotes-style).
             let shape = UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 6, bottomTrailingRadius: 10, topTrailingRadius: 10, style: .continuous)
             ZStack(alignment: .topLeading) {
-                Color(hex: paper.hex)
-                Rectangle().fill(Color.black.opacity(0.12)).frame(width: 4)
-                Text(doc.name).font(fnt(12, .bold)).foregroundStyle(fg).lineLimit(3).padding(.leading, 14).padding(.trailing, 10).padding(.top, 18)
+                Color(hex: doc.coverHex)
+                DocumentThumbnail(doc: doc)
             }
             .frame(width: Metrics.notebookTile.w, height: Metrics.notebookTile.h)
             .clipShape(shape)
             .overlay(shape.stroke(theme.line, lineWidth: 1))
-            .shadow(color: Shadows.pill.color, radius: Shadows.pill.radius, y: Shadows.pill.y)
+            .pageShadow(theme)
         }
     }
 }
@@ -166,7 +164,7 @@ struct NewDocumentSheet: View {
         if let draft = app.newDraft {
             let d = Binding(get: { app.newDraft ?? draft }, set: { app.newDraft = $0 })
             VStack(alignment: .leading, spacing: 18) {
-                Text(draft.type.newSheetTitle).font(fnt(20, .heavy)).foregroundStyle(theme.ink1)
+                Text(draft.type.newSheetTitle).font(titleFnt(20)).foregroundStyle(theme.ink1)
                 FieldText(placeholder: "Name", text: d.name, height: 40, font: fnt(15))
                 if draft.type == .markup {
                     VStack(spacing: 8) {
@@ -242,6 +240,18 @@ struct NewDocumentSheet: View {
                     }
                 } else {
                     VStack(alignment: .leading, spacing: 8) {
+                        SectionLabel(text: "Cover")
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 8), spacing: 8) {
+                            ForEach(Covers.palette, id: \.self) { c in
+                                let on = HexColor.same(draft.coverColor, c)
+                                Circle().fill(Color(hex: c)).frame(width: 36, height: 36)
+                                    .overlay(Circle().stroke(Color.black.opacity(0.12), lineWidth: 1))
+                                    .overlay(Circle().stroke(theme.accent, lineWidth: on ? 2 : 0).padding(-4))
+                                    .onTapGesture { app.newDraft?.coverColor = c }
+                            }
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
                         SectionLabel(text: "Template")
                         HStack(spacing: 10) {
                             ForEach(PageTemplate.allCases, id: \.self) { t in
@@ -308,7 +318,8 @@ struct DocumentThumbnail: View {
                                             selection: [], eraseHits: [], highlightComment: nil, selectedField: nil, showFieldTags: false,
                                             lasso: nil, marquee: nil, blueprint: app.settings.blueprint, pdfImage: img,
                                             pdfLoading: doc.pdfFile != nil && img == nil, drawingPaper: doc.paper,
-                                            accentHex: "#007AFF", showSelection: false)
+                                            accentHex: "#007AFF", showSelection: false,
+                                            coverTitle: doc.type == .journal ? doc.name : nil, coverHex: doc.type == .journal ? doc.coverHex : nil)
                 PageCanvas(input: input, size: CGSize(width: c.w * z, height: c.h * z), async: true)
             }
         }

@@ -16,7 +16,7 @@ struct StampGalleryView: View {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 9), GridItem(.flexible(), spacing: 9)], spacing: 9) {
                     ForEach(ToolCatalog.stampPresets, id: \.text) { s in
                         let on = editor.stampText == s.text && editor.tool == .stamps
-                        Text(s.text).font(fnt(12, .heavy)).tracking(1.2).foregroundStyle(Color(hex: s.color))
+                        Text(s.text).font(fnt(12, .bold)).tracking(1.2).foregroundStyle(Color(hex: s.color))
                             .frame(maxWidth: .infinity).padding(.vertical, 7).padding(.horizontal, 4)
                             .background(RoundedRectangle(cornerRadius: 6).fill(on ? theme.hov : .clear))
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(hex: s.color), lineWidth: 2.5))
@@ -49,7 +49,7 @@ struct FavoritesTrayView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach(ToolCatalog.markupTabs) { tab in
                         VStack(alignment: .leading, spacing: 5) {
-                            Text(tab.label.uppercased()).font(fnt(10.5, .heavy)).tracking(0.7).foregroundStyle(Color(hex: "#aeaeb2")).padding(.horizontal, 2)
+                            Text(tab.label.uppercased()).font(fnt(10.5, .bold)).tracking(0.7).foregroundStyle(Color(hex: "#aeaeb2")).padding(.horizontal, 2)
                             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 5), count: 3), spacing: 5) {
                                 ForEach(tab.tools, id: \.self) { t in
                                     let count = editor.pinCount(t)
@@ -58,7 +58,7 @@ struct FavoritesTrayView: View {
                                         Text(t.label).font(fnt(12, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
                                         Spacer(minLength: 0)
                                         if count > 0 {
-                                            Text("\(count)").font(fnt(10, .heavy)).foregroundStyle(.white).padding(.horizontal, 5).frame(minWidth: 17, minHeight: 17)
+                                            Text("\(count)").font(fnt(10, .bold)).foregroundStyle(.white).padding(.horizontal, 5).frame(minWidth: 17, minHeight: 17)
                                                 .background(Capsule().fill(theme.accent))
                                         }
                                     }
@@ -171,8 +171,8 @@ struct ExportMenu: View {
         }
         .padding(8)
         .frame(width: Metrics.exportWidth)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(theme.popSolid)
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.line, lineWidth: 1))
             .shadow(color: theme.popShadow, radius: 20, y: 12))
     }
 }
@@ -204,7 +204,7 @@ struct FlattenDialog: View {
             : (keepOK ? "Ink merges and the layer below keeps a combined veil." : "Not available — the Base has no veil.")
         ModalScrim(dismiss: { editor.flatten = nil }) {
             VStack(alignment: .leading, spacing: 14) {
-                Text(title).font(fnt(18, .heavy)).foregroundStyle(theme.ink1)
+                Text(title).font(titleFnt(18)).foregroundStyle(theme.ink1)
                 Text(desc).font(fnt(13)).foregroundStyle(theme.ink3).lineSpacing(3)
                 option("Keep as trace", keepDesc, enabled: keepOK) { editor.doFlatten(.keep) }
                 option("Ink only", "Merge the ink and discard the veil. Full-strength ink on the sheet below.", enabled: true) { editor.doFlatten(.ink) }
@@ -243,7 +243,7 @@ struct OrganizePagesView: View {
         let sel = selected ?? editor.pageIndex
         VStack(spacing: 0) {
             HStack {
-                Text("Organize Pages").font(fnt(21, .heavy)).foregroundStyle(theme.ink1)
+                Text("Organize Pages").font(titleFnt(21)).foregroundStyle(theme.ink1)
                 Spacer()
                 PrimaryButton(label: "Done", height: 32) { editor.organizeOpen = false }
             }

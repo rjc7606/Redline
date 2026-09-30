@@ -117,9 +117,9 @@ struct AnnotationPopup: View {
             }
             .padding(12)
             .frame(width: width)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-                .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y))
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(theme.popSolid)
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.line, lineWidth: 1))
+                .popShadow(theme))
             .offset(x: x, y: y)
             .popIn()
             .onAppear { if editor.annotationFocusComment { commentFocused = true; editor.annotationFocusComment = false } }

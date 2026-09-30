@@ -127,23 +127,28 @@ System font (SF Pro). Sizes in use: 9.5, 10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5,
 - Only fingers move the ruler; Pencil strokes started beside it follow its edge; Lock snaps every stroke.
 - Sidebar starts closed; opening it rescales pages to keep the same fill of the view.
 
-## 6. Tokens (current — handoff v2 applied 2026-09-30)
-Light: accent `#007AFF`, bg `#f2f2f7`, bg2 `#eceaef`, bg3 `#e4e2e8`, card `#ffffff`, bar
-`rgba(249,249,251,.94)`, pop `rgba(250,250,252,.97)`, field `#e9e8ee`, ink1 `#1c1c1e`, ink2 `#3a3a3c`,
-ink3 `#6d6d72`, ink4 `#8e8e93`, dis `#c7c7cc`, line `rgba(0,0,0,.09)`, line2 `rgba(0,0,0,.22)`,
-hov `rgba(0,0,0,.05)`, hov2 `rgba(0,0,0,.08)`, canvas `#d9d8dd`, danger `#FF3B30`,
-chipOpen `#FFF1DC / #B25E00`, chipResolved `#E2F7E8 / #1D7A3B`.
-Dark: bg `#1c1c1f`, bg2 `#232327`, bg3 `#2f2f34`, card `#2a2a2e`, bar `rgba(35,35,39,.94)`, pop
-`rgba(46,46,51,.97)`, field `#2f2f34`, ink1 `#f2f2f7`, ink2 `#d1d1d6`, ink3 `#a3a3a8`, ink4 `#8e8e93`,
-dis `#4a4a4f`, line `rgba(255,255,255,.08)`, line2 `rgba(255,255,255,.18)`, hov `rgba(255,255,255,.06)`,
-hov2 `rgba(255,255,255,.10)`, canvas `#121214` (page well only), danger `#FF453A`,
-chipOpen `rgba(255,159,10,.16) / #FFB340`, chipResolved `rgba(52,199,89,.16) / #4CD964`.
-Radii: 4 chips, 6, 7, 8 segments, 9 buttons/rows, 10, 14 popovers, 16 modals.
-Shadows: popover `0 14 44 rgba(0,0,0,.22)` (dark `.5`), modal `0 20 60 rgba(0,0,0,.3)`, pill `0 1 3 rgba(0,0,0,.14)`.
+## 6. Tokens (current — "warm paper" handoff applied 2026-09-30)
+Light: accent `#2F6FE4`, bg `#f4f1ea`, bg2 `#ece8df`, bg3 `#e2ddd2`, card `#fbf9f4`, field `#eae6dc`, bar
+`rgba(244,241,234,.94)`, pop `rgba(251,249,244,.97)`, canvas `#d9d4c8`, ink1 `#2a2622`, ink2 `#4a443d`,
+ink3 `#7a736a`, ink4 `#968e84`, dis `#cfc9be`, line `rgba(60,45,30,.10)`, line2 `.22`, hov `.05`, hov2 `.09`,
+chipOpen `#FBEBD3 / #9A5A12`. Paper grain: 160 pt noise tile, multiply 4 %, on bg and the canvas well only.
+Dark (neutral): accent `#6C96E0`, bg `#1f1f22`, bg2 `#26262a`, bg3 `#323236`, card `#2b2b2f`, field `#323236`,
+bar `rgba(38,38,42,.94)`, pop `rgba(48,48,53,.97)`, canvas `#151517`, ink1 `#ecebe8`, ink2 `#cfcecb`, ink3 `#a09f9c`,
+ink4 `#84837f`, dis `#4b4b4f`, line `rgba(255,255,255,.08)`, line2 `.16`, hov `.06`, hov2 `.10`,
+chipOpen `rgba(230,170,90,.16) / #E4B276`. No grain.
+Identity (both): Markups `#C4554A`, Drawings `#8B6BB1`, Notes `#5B9A6B`; destructive `#C4554A`; status Accepted
+`#5B9A6B` on 16 %, Rejected destructive on 14 %, Completed ink4 on hov2. Default red preset is true red `#E0332A`.
+Type: titles and section labels SF Pro Rounded (title 26/700, app name 22/700, SectionLabel 11/600 tracking .4);
+body SF Pro; no weight above 700; tile names and row labels 500; rail headers 600; chips 11/600; counts monospaced digits.
+Radii: popovers/sheets 16, rows/buttons/fields 10, tiles 8, chips 6.
+Shadows: page `0 1 2 rgba(40,30,20,.12) + 0 8 24 .10` (dark `.4/.35` black); popover `0 2 6 .08 + 0 16 40 .16`;
+pill `0 1 3 rgba(0,0,0,.14)`.
 Bars 54; sidebar 260 (all tools); NavColumn 240; Settings nav 250; popover 250; presets 176; modal 560;
 compact threshold 900; DocTile 132 wide (page aspect); notebook tile 104 × 140; Organize Pages thumbs 160.
-Default presets: pens `#1c1c1e #e8483f #007AFF #34C759`; marker/highlighter `#ffd60a #ff6fa8 #34C759
-#007AFF`; fill/sticky note `#FFCC00 #FF3B30 #007AFF #34C759`; others `#e8483f #1c1c1e #007AFF #FF9500`.
+Notebook covers: composition-book style (marbled speckle over a cover colour from a 16-colour palette, dark spine,
+white label plate with the name); the cover is a drawable page and its render is the thumbnail.
+Default presets: pens `#1c1c1e #E0332A #007AFF #34C759`; marker/highlighter `#ffd60a #ff6fa8 #34C759
+#007AFF`; fill/sticky note `#FFCC00 #FF3B30 #007AFF #34C759`; others `#E0332A #1c1c1e #007AFF #FF9500`.
 Text box presets (text = border / fill): `#FF3B30`/white, `#1c1c1e`/`#FFF9C4`, `#007AFF`/white,
 white/`#1c1c1e`; border 1.5 pt, shapes fill at 50 %. Widths: Pen 1–12, Fineliner .5–6, Felt 2–20,
 Marker 6–40, Highlighter 10–40, shapes 1–16, text 1–14 (size = 10 + value pt), eraser 6/12/24/40.

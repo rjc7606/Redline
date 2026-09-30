@@ -17,7 +17,7 @@ struct SegmentControl<T: Hashable>: View {
     var fontSize: Double = 13
     var vPad: Double = 5
     var hPad: Double = 13
-    var radius: Double = 9
+    var radius: Double = 10
     var fill: Bool = false
 
     var body: some View {
@@ -99,7 +99,7 @@ struct PrimaryButton: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
             .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: height >= 36 ? 9 : 8, style: .continuous).fill(tint ?? theme.accent))
+            .background(RoundedRectangle(cornerRadius: height >= 36 ? 10 : 8, style: .continuous).fill(tint ?? theme.accent))
         }
         .buttonStyle(.plain)
     }
@@ -125,25 +125,25 @@ struct SecondaryButton: View {
             .foregroundStyle(tint ?? theme.ink1)
             .padding(.horizontal, label.isEmpty ? 0 : 12)
             .frame(minWidth: height, minHeight: height, maxHeight: height)
-            .background(RoundedRectangle(cornerRadius: height >= 36 ? 9 : 8, style: .continuous).fill(theme.bg3))
+            .background(RoundedRectangle(cornerRadius: height >= 36 ? 10 : 8, style: .continuous).fill(theme.bg3))
         }
         .buttonStyle(.plain)
     }
 }
 
-/// 11pt/700 uppercase section label.
+/// 11/600 uppercase section label, SF Pro Rounded, tracking .4 (handoff v2).
 struct SectionLabel: View {
     @Environment(\.theme) private var theme
     var text: String
     var body: some View {
         Text(text.uppercased())
-            .font(fnt(11, .bold))
-            .tracking(0.5)
+            .font(titleFnt(11, .semibold))
+            .tracking(0.4)
             .foregroundStyle(theme.ink4)
     }
 }
 
-/// Floating card chrome for popovers/menus (radius 14, popover shadow).
+/// Floating card chrome for popovers/menus (radius 16, two-layer popover shadow).
 struct PopoverCard<Content: View>: View {
     @Environment(\.theme) private var theme
     var width: CGFloat? = nil
@@ -154,10 +154,10 @@ struct PopoverCard<Content: View>: View {
             .padding(padding)
             .frame(width: width)
             .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(theme.popSolid)
-                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-                    .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y)
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.line, lineWidth: 1))
+                    .popShadow(theme)
             )
     }
 }
@@ -191,12 +191,12 @@ struct NavRow: View {
                 .frame(width: 20)
                 Text(label).font(fnt(14, active ? .semibold : .medium)).foregroundStyle(active ? theme.ink1 : theme.ink2).lineLimit(1)
                 Spacer(minLength: 0)
-                if let t = trailing { Text(t).font(fnt(11.5, .medium)).foregroundStyle(theme.ink4) }
+                if let t = trailing { Text(t).font(fnt(11.5, .medium)).monospacedDigit().foregroundStyle(theme.ink4) }
             }
             .padding(.leading, 10 + indent)
             .padding(.trailing, 10)
             .frame(height: 36)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(active ? theme.hov2 : .clear))
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(active ? theme.hov2 : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -242,7 +242,7 @@ struct AvatarView: View {
     var size: Double = 20
     var body: some View {
         Text(Avatar.initials(name))
-            .font(fnt(size * 0.45, .heavy))
+            .font(fnt(size * 0.45, .bold))
             .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background(Circle().fill(Color(hex: Avatar.color(for: name))))
@@ -264,7 +264,7 @@ struct FieldText: View {
             .foregroundStyle(theme.ink1)
             .padding(.horizontal, 12)
             .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.field))
     }
 }
 
@@ -276,7 +276,7 @@ struct StatusChip: View {
     var height: Double = 22
     var body: some View {
         let c = theme.chip(for: status)
-        Text(status.rawValue).font(fnt(height >= 22 ? 11 : 10, .bold)).foregroundStyle(c.fg)
+        Text(status.rawValue).font(fnt(height >= 22 ? 11 : 10, .semibold)).foregroundStyle(c.fg)
             .padding(.horizontal, height >= 22 ? 8 : 6).frame(height: height)
             .background(RoundedRectangle(cornerRadius: height >= 22 ? 6 : 5, style: .continuous).fill(c.bg))
     }

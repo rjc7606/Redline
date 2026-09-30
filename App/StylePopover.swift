@@ -26,7 +26,7 @@ struct PresetsRow: View {
                     Circle().strokeBorder(border, lineWidth: 2.5)
                     Circle().strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
                     if isText {
-                        Text("A").font(fnt(13, .heavy)).foregroundStyle(Color(hex: p.color))
+                        Text("A").font(fnt(13, .bold)).foregroundStyle(Color(hex: p.color))
                     } else if isEraser {
                         Circle().fill(theme.ink3).frame(width: max(4, min(24, p.width * 0.6)), height: max(4, min(24, p.width * 0.6)))
                     } else if !isShape && !isFill {

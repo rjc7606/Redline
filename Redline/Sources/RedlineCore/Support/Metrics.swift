@@ -72,26 +72,31 @@ public struct ThemeTokens: Sendable, Equatable {
     /// Popover shadow opacity.
     public var popShadowAlpha: Double = 0.22
 
+    /// Light theme (handoff v2, "warm paper"): warm neutrals, no pure grey or black; overlays are tinted brown.
     public static let light: ThemeTokens = {
-        var t = ThemeTokens(accent: "#007AFF", bg: "#f2f2f7", bg2: "#eceaef", bg3: "#e4e2e8", card: "#ffffff",
-                            bar: "#f9f9fb", barAlpha: 0.94, pop: "#fafafc", popAlpha: 0.97,
-                            ink1: "#1c1c1e", ink2: "#3a3a3c", ink3: "#6d6d72", ink4: "#8e8e93", dis: "#c7c7cc",
-                            lineAlpha: 0.09, line2Alpha: 0.22, hovAlpha: 0.05, hov2Alpha: 0.08, overlayBase: "#000000",
-                            canvas: "#d9d8dd", isDark: false)
-        t.field = "#e9e8ee"
+        var t = ThemeTokens(accent: "#2F6FE4", bg: "#f4f1ea", bg2: "#ece8df", bg3: "#e2ddd2", card: "#fbf9f4",
+                            bar: "#f4f1ea", barAlpha: 0.94, pop: "#fbf9f4", popAlpha: 0.97,
+                            ink1: "#2a2622", ink2: "#4a443d", ink3: "#7a736a", ink4: "#968e84", dis: "#cfc9be",
+                            lineAlpha: 0.10, line2Alpha: 0.22, hovAlpha: 0.05, hov2Alpha: 0.09, overlayBase: "#3c2d1e",
+                            canvas: "#d9d4c8", isDark: false)
+        t.field = "#eae6dc"
+        t.chipOpenBg = "#FBEBD3"; t.chipOpenBgAlpha = 1; t.chipOpenFg = "#9A5A12"
+        t.chipResolvedBg = "#5B9A6B"; t.chipResolvedBgAlpha = 0.16; t.chipResolvedFg = "#5B9A6B"
+        t.danger = "#C4554A"
+        t.popShadowAlpha = 0.16
         return t
     }()
-    /// Dark theme (handoff v2): every surface lifted one step; only the page well stays near-black.
+    /// Dark theme (handoff v2): neutral, not warm; the warmth only lives in light mode.
     public static let dark: ThemeTokens = {
-        var t = ThemeTokens(accent: "#007AFF", bg: "#1c1c1f", bg2: "#232327", bg3: "#2f2f34", card: "#2a2a2e",
-                            bar: "#232327", barAlpha: 0.94, pop: "#2e2e33", popAlpha: 0.97,
-                            ink1: "#f2f2f7", ink2: "#d1d1d6", ink3: "#a3a3a8", ink4: "#8e8e93", dis: "#4a4a4f",
-                            lineAlpha: 0.08, line2Alpha: 0.18, hovAlpha: 0.06, hov2Alpha: 0.10, overlayBase: "#ffffff",
-                            canvas: "#121214", isDark: true)
-        t.field = "#2f2f34"
-        t.chipOpenBg = "#FF9F0A"; t.chipOpenBgAlpha = 0.16; t.chipOpenFg = "#FFB340"
-        t.chipResolvedBg = "#34C759"; t.chipResolvedBgAlpha = 0.16; t.chipResolvedFg = "#4CD964"
-        t.danger = "#FF453A"
+        var t = ThemeTokens(accent: "#6C96E0", bg: "#1f1f22", bg2: "#26262a", bg3: "#323236", card: "#2b2b2f",
+                            bar: "#26262a", barAlpha: 0.94, pop: "#303035", popAlpha: 0.97,
+                            ink1: "#ecebe8", ink2: "#cfcecb", ink3: "#a09f9c", ink4: "#84837f", dis: "#4b4b4f",
+                            lineAlpha: 0.08, line2Alpha: 0.16, hovAlpha: 0.06, hov2Alpha: 0.10, overlayBase: "#ffffff",
+                            canvas: "#151517", isDark: true)
+        t.field = "#323236"
+        t.chipOpenBg = "#E6AA5A"; t.chipOpenBgAlpha = 0.16; t.chipOpenFg = "#E4B276"
+        t.chipResolvedBg = "#5B9A6B"; t.chipResolvedBgAlpha = 0.16; t.chipResolvedFg = "#5B9A6B"
+        t.danger = "#C4554A"
         t.popShadowAlpha = 0.5
         return t
     }()

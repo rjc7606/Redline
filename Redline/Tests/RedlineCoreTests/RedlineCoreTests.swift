@@ -397,6 +397,7 @@ extension ToolStyles {
     #expect(cal.cells.contains { $0.isToday })
     let todayPages = cal.cells.first { $0.isToday }!.pages
     #expect(todayPages.contains(doc.pages.count - 1))
+    #expect(!todayPages.contains(0))
 }
 
 @Test func layoutMath() {

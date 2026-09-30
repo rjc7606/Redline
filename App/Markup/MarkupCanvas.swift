@@ -13,7 +13,7 @@ struct MarkupCanvas: View {
     var body: some View {
         let mk = editor.mk
         ZStack(alignment: .topLeading) {
-            theme.canvas
+            GrainBackground(color: theme.canvas)
             PDFViewRepresentable(editor: editor, tick: mk.renderTick, viewportTick: mk.viewportTick, canvasColor: UIColor(hex: theme.tokens.canvas))
             if let te = mk.textEdit { PDFTextEditor(editor: editor, edit: te) }
             if mk.annotationPopup, mk.textEdit == nil { PDFAnnotationPopup(editor: editor) }
@@ -353,7 +353,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
     override func draw(_ rect: CGRect) {
         guard let cg = UIGraphicsGetCurrentContext(), let v = pdfView else { return }
         let mk = editor.mk
-        let accent = UIColor(hex: "#007AFF")
+        let accent = UIColor(hex: editor.app.settings.theme == .dark ? "#6C96E0" : "#2F6FE4")
         let z = v.scaleFactor
 
         // Live mark

@@ -35,9 +35,9 @@ struct ToolButton: View {
             glyphFill = Color(hex: st.background ?? "#ffffff", alpha: min(0.85, st.backgroundOpacity ?? 1))
         }
         return ZStack {
-            RoundedRectangle(cornerRadius: 9, style: .continuous).fill(bg)
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(bg)
             if on, let c {
-                RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(unreadable ? theme.ink1 : Color(hex: c), lineWidth: 2)
+                RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(unreadable ? theme.ink1 : Color(hex: c), lineWidth: 2)
             }
             ToolIcon(tool: tool, size: 20, color: tint, glyphFill: glyphFill, glyphStroke: glyphStroke)
         }
@@ -49,7 +49,7 @@ struct ToolButton: View {
         .overlay(alignment: .topTrailing) {
             if let i = editIndex {
                 Button { editor.removePin(at: i) } label: {
-                    Image(systemName: "xmark").font(fnt(8, .heavy)).foregroundStyle(.white).frame(width: 15, height: 15)
+                    Image(systemName: "xmark").font(fnt(8, .bold)).foregroundStyle(.white).frame(width: 15, height: 15)
                         .background(Circle().fill(theme.danger)).shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
                 }.buttonStyle(.plain).offset(x: 2, y: 2)
             }
@@ -76,10 +76,10 @@ struct PresetsDropdown: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(theme.popSolid)
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-                .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y)
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.line, lineWidth: 1))
+                .popShadow(theme)
         )
     }
 }
@@ -123,10 +123,6 @@ struct TopBar<Center: View>: View {
             }.buttonStyle(.plain)
             if !compact {
                 Text(editor.doc.name).font(fnt(13, .bold)).foregroundStyle(theme.ink1).lineLimit(1).frame(maxWidth: 260, alignment: .leading)
-                let chip = editor.type.modeChipHex
-                Text(editor.type.modeLabel.uppercased()).font(fnt(10, .heavy)).tracking(0.5)
-                    .foregroundStyle(Color(hex: chip.fg)).padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 5).fill(Color(hex: chip.fg, alpha: chip.bgAlpha)))
             }
             Spacer(minLength: 4)
             center

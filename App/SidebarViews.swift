@@ -182,11 +182,11 @@ struct FormsPanel: View {
                         SectionLabel(text: "Fields on this page · tab order")
                         ForEach(editor.page.fields.sorted { $0.tab < $1.tab }) { f in
                             HStack(spacing: 8) {
-                                Text("\(f.tab)").font(fnt(10, .heavy)).foregroundStyle(theme.ink4).frame(width: 14)
+                                Text("\(f.tab)").font(fnt(10, .bold)).foregroundStyle(theme.ink4).frame(width: 14)
                                 Image(systemName: f.type.symbol).font(fnt(12)).foregroundStyle(theme.ink3)
                                 Text(f.name).font(fnt(12, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
                                 Spacer()
-                                if f.required { Text("*").font(fnt(12, .heavy)).foregroundStyle(theme.danger) }
+                                if f.required { Text("*").font(fnt(12, .bold)).foregroundStyle(theme.danger) }
                             }
                             .padding(.horizontal, 8).padding(.vertical, 6)
                             .background(RoundedRectangle(cornerRadius: 7).fill(editor.selectedField == f.id ? theme.accentSoft : .clear))
@@ -213,7 +213,7 @@ struct FieldEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(field.type.label + " field").font(fnt(12, .heavy)).foregroundStyle(theme.ink1)
+                Text(field.type.label + " field").font(fnt(12, .bold)).foregroundStyle(theme.ink1)
                 Spacer()
                 Button("Delete") { editor.deleteField(field.id) }.font(fnt(11, .bold)).foregroundStyle(theme.danger).buttonStyle(.plain)
             }
@@ -470,7 +470,7 @@ struct TagsPanel: View {
                 if editor.tagFilter != nil || !q.isEmpty {
                     ForEach(pages, id: \.element.id) { i, pg in
                         HStack(spacing: 10) {
-                            RoundedRectangle(cornerRadius: 3).fill(Color(hex: pg.paper.hex)).frame(width: 36, height: 48)
+                            RoundedRectangle(cornerRadius: 3).fill(Color(hex: i == 0 ? editor.doc.coverHex : pg.paper.hex)).frame(width: 36, height: 48)
                                 .shadow(color: .black.opacity(0.2), radius: 1.5, y: 1)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(BookGeometry.longLabel(for: i)).font(fnt(12.5, .bold)).foregroundStyle(theme.ink1)

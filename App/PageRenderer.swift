@@ -27,6 +27,10 @@ struct PageRenderInput: Equatable {
     var showSelection: Bool = true
     /// Stroke ids that carry the "has a comment" badge (first mark of each commented annotation).
     var commentBadges: Set<ID> = []
+    /// Notebook cover: the title drawn on the page (nil for every other page).
+    var coverTitle: String? = nil
+    /// Notebook cover colour (with `coverTitle`).
+    var coverHex: String? = nil
 
     static func == (a: PageRenderInput, b: PageRenderInput) -> Bool {
         a.page == b.page && a.docType == b.docType && a.transform == b.transform && a.zoom == b.zoom && a.activeLayer == b.activeLayer
@@ -46,7 +50,7 @@ enum PageRenderer {
         switch input.docType {
         case .markup: input.pdfImage != nil ? "#ffffff" : (input.blueprint ? blueprintPaper : input.page.paper.hex)
         case .drawing: input.drawingPaper.hex
-        case .journal: input.page.paper.hex
+        case .journal: input.coverHex ?? input.page.paper.hex
         }
     }
 
@@ -63,7 +67,8 @@ enum PageRenderer {
         // Template / artwork
         switch input.docType {
         case .journal:
-            drawTemplate(input.page.template, paperDark: input.page.paper.isDark, in: ctx, W: W, H: H)
+            if let title = input.coverTitle { drawCover(title: title, hex: input.coverHex ?? input.page.paper.hex, in: ctx, W: W, H: H) }
+            else { drawTemplate(input.page.template, paperDark: input.page.paper.isDark, in: ctx, W: W, H: H) }
         case .markup:
             if let img = input.pdfImage {
                 ctx.draw(Image(uiImage: img), in: pageRect)
@@ -158,6 +163,37 @@ enum PageRenderer {
     }
 
     // MARK: templates
+
+    /// Composition-notebook cover: marbled speckle over the cover colour, a dark cloth spine, and a white label
+    /// plate with the title. Ink is drawn on top like any page, so drawings show in the thumbnail.
+    static func drawCover(title: String, hex: String, in ctx: GraphicsContext, W: Double, H: Double) {
+        let page = CGRect(x: 0, y: 0, width: W, height: H)
+        let dark = Covers.isDark(hex)
+        // marbling (cached texture image, white speckles)
+        ctx.draw(Image(uiImage: CoverTexture.shared.image), in: page)
+        if dark { ctx.fill(Path(page), with: .color(Color.black.opacity(0.25))) }
+        // spine
+        let spineW = W * 0.075
+        ctx.fill(Path(CGRect(x: 0, y: 0, width: spineW, height: H)), with: .color(Color.black.opacity(0.62)))
+        ctx.fill(Path(CGRect(x: spineW, y: 0, width: W * 0.006, height: H)), with: .color(Color.white.opacity(0.35)))
+        // label plate
+        let plate = CGRect(x: W * 0.22, y: H * 0.2, width: W * 0.6, height: H * 0.19)
+        let r = W * 0.012
+        ctx.fill(Path(roundedRect: plate, cornerRadius: r), with: .color(Color.black.opacity(0.18)))
+        ctx.fill(Path(roundedRect: plate.offsetBy(dx: 0, dy: -H * 0.003), cornerRadius: r), with: .color(.white))
+        ctx.stroke(Path(roundedRect: plate.insetBy(dx: W * 0.012, dy: W * 0.012), cornerRadius: r * 0.6), with: .color(Color.black.opacity(0.22)), lineWidth: 1.5)
+        let inner = plate.insetBy(dx: W * 0.035, dy: W * 0.03)
+        for f in [0.62, 0.8] {
+            let y = inner.minY + inner.height * f
+            ctx.fill(Path(CGRect(x: inner.minX, y: y, width: inner.width, height: 1.2)), with: .color(Color.black.opacity(0.18)))
+        }
+        let label = Text(title).font(.system(size: W * 0.05, weight: .bold)).foregroundStyle(Color(hex: "#1c1c1e"))
+        let resolved = ctx.resolve(label)
+        let box = CGSize(width: inner.width, height: inner.height * 0.58)
+        let sz = resolved.measure(in: box)
+        let tw = min(sz.width, box.width), th = min(sz.height, box.height)
+        ctx.draw(resolved, in: CGRect(x: inner.midX - tw / 2, y: inner.minY + (box.height - th) / 2, width: tw, height: th))
+    }
 
     static func drawTemplate(_ t: PageTemplate, paperDark: Bool, in ctx: GraphicsContext, W: Double, H: Double) {
         guard t != .blank else { return }
@@ -291,7 +327,7 @@ enum PageRenderer {
 
     static func drawStamp(_ s: Stroke, in ctx: GraphicsContext, dim: Bool, glow: Bool, accent: Color) {
         let c = Color(hex: s.color)
-        let text = Text(s.text ?? "").font(.system(size: 17 * s.scale, weight: .heavy)).tracking(2 * s.scale).foregroundStyle(c)
+        let text = Text(s.text ?? "").font(.system(size: 17 * s.scale, weight: .bold)).tracking(2 * s.scale).foregroundStyle(c)
         let resolved = ctx.resolve(text)
         let size = resolved.measure(in: CGSize(width: 800, height: 200))
         let box = CGRect(x: -size.width / 2 - 14 * s.scale, y: -size.height / 2 - 5 * s.scale, width: size.width + 28 * s.scale, height: size.height + 10 * s.scale)
@@ -335,7 +371,7 @@ enum PageRenderer {
         switch f.type {
         case .check, .radio, .toggle:
             if f.isOn {
-                let mark = Text(f.type == .radio ? "●" : "✓").font(.system(size: 16, weight: .heavy)).foregroundStyle(accent)
+                let mark = Text(f.type == .radio ? "●" : "✓").font(.system(size: 16, weight: .bold)).foregroundStyle(accent)
                 ctx.draw(mark, at: CGPoint(x: r.midX, y: r.midY), anchor: .center)
             }
         case .sig:
@@ -349,6 +385,48 @@ enum PageRenderer {
         if showTag {
             let tag = Text("\(f.name)\(f.required ? " *" : "") · tab \(f.tab)").font(.system(size: 9, weight: .bold)).foregroundStyle(accent)
             ctx.draw(tag, at: CGPoint(x: r.minX, y: r.minY - 3), anchor: .bottomLeading)
+        }
+    }
+}
+
+
+/// White speckle texture for notebook covers (drawn over the cover colour). Generated once, deterministic.
+final class CoverTexture: @unchecked Sendable {
+    static let shared = CoverTexture()
+    let image: UIImage
+
+    private init() {
+        let W = Metrics.notesCanvas.w, H = Metrics.notesCanvas.h
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 2
+        fmt.opaque = false
+        var seed: UInt64 = 0x9E3779B97F4A7C15
+        func rnd() -> Double {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return Double(seed >> 11) / Double(1 << 53)
+        }
+        image = UIGraphicsImageRenderer(size: CGSize(width: W, height: H), format: fmt).image { c in
+            let cg = c.cgContext
+            // fine speckle
+            for _ in 0..<5200 {
+                let x = rnd() * W, y = rnd() * H
+                let w = 1.2 + rnd() * 5.5, h = 1.0 + rnd() * 3.0
+                cg.setFillColor(UIColor(white: 1, alpha: 0.55 + rnd() * 0.4).cgColor)
+                cg.saveGState()
+                cg.translateBy(x: x, y: y); cg.rotate(by: rnd() * .pi)
+                cg.fillEllipse(in: CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+                cg.restoreGState()
+            }
+            // larger patches
+            for _ in 0..<420 {
+                let x = rnd() * W, y = rnd() * H
+                let w = 5 + rnd() * 16, h = 3 + rnd() * 9
+                cg.setFillColor(UIColor(white: 1, alpha: 0.35 + rnd() * 0.4).cgColor)
+                cg.saveGState()
+                cg.translateBy(x: x, y: y); cg.rotate(by: rnd() * .pi)
+                cg.fillEllipse(in: CGRect(x: -w / 2, y: -h / 2, width: w, height: h))
+                cg.restoreGState()
+            }
         }
     }
 }

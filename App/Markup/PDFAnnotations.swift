@@ -264,7 +264,7 @@ enum AnnotationFactory {
 
     /// Stamp-like text (APPROVED, date, initials): bordered bold FreeText so every reader shows it.
     static func stampText(center: CGPoint, text: String, colorHex: String, author: String, tool: Tool) -> PDFAnnotation {
-        let font = UIFont.systemFont(ofSize: 18, weight: .heavy)
+        let font = UIFont.systemFont(ofSize: 18, weight: .bold)
         let size = (text as NSString).size(withAttributes: [.font: font])
         let rect = CGRect(x: center.x - size.width / 2 - 12, y: center.y - size.height / 2 - 6, width: size.width + 24, height: size.height + 12)
         let a = RedlineFreeText(bounds: rect, forType: .freeText, withProperties: nil)

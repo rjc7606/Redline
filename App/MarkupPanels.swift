@@ -145,8 +145,8 @@ struct FieldInspector: View {
         }
         .padding(12)
         .frame(width: 262)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-            .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y))
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(theme.popSolid)
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.line, lineWidth: 1))
+            .popShadow(theme))
     }
 }

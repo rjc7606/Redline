@@ -22,7 +22,8 @@ extension WorkspaceModel {
             eraseHits: showLive ? eraseHits : [], highlightComment: interactive ? selectedComment : nil,
             selectedField: interactive ? selectedField : nil, showFieldTags: interactive && onFormsTab,
             lasso: showLive ? lasso : nil, marquee: showLive ? marquee : nil, blueprint: app.settings.blueprint, pdfImage: pdf,
-            pdfLoading: type == .markup && doc.pdfFile != nil && pdf == nil, drawingPaper: doc.paper, accentHex: app.settings.theme == .dark ? "#0A84FF" : "#007AFF", showSelection: interactive, commentBadges: badges)
+            pdfLoading: type == .markup && doc.pdfFile != nil && pdf == nil, drawingPaper: doc.paper, accentHex: app.settings.theme == .dark ? "#6C96E0" : "#2F6FE4", showSelection: interactive, commentBadges: badges,
+            coverTitle: type == .journal && i == 0 ? doc.name : nil, coverHex: type == .journal && i == 0 ? doc.coverHex : nil)
     }
 }
 

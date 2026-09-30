@@ -25,6 +25,8 @@ struct NewDocumentDraft {
     var landscape: Bool = false
     /// Library folder the new document lands in.
     var folder: String = ""
+    /// Notebook cover colour.
+    var coverColor: String = Covers.palette[0]
 
     init(type: DocumentType) {
         self.type = type
@@ -119,6 +121,7 @@ final class AppModel {
         var created = doc
         created.sheetSize = d.sheetSize
         created.folder = d.folder
+        if d.type == .journal { created.coverColor = d.coverColor }
         if d.type == .markup && d.pdfFile == nil {
             // A new markup is a real PDF file on the chosen paper.
             let size = d.landscape ? CGSize(width: 792, height: 612) : CGSize(width: 612, height: 792)

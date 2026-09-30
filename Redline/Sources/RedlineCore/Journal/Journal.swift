@@ -3,7 +3,8 @@
 import Foundation
 
 /// Which pages are visible and where the prev/next navigation lands.
-/// Page 0 is the cover; in spread mode the cover sits alone on the right, then (1,2), (3,4)…
+/// Page 0 is the cover: a stylised page you can draw on, whose render is the notebook's thumbnail. In spread
+/// mode the cover sits alone on the right, then (1,2), (3,4)…
 public struct BookGeometry: Sendable, Equatable {
     public var spread: Bool
     public var pageCount: Int
@@ -44,6 +45,24 @@ public struct BookGeometry: Sendable, Equatable {
     public static func longLabel(for index: Int) -> String { index == 0 ? "Cover" : "Page \(index)" }
 }
 
+/// Composition-notebook cover colours (New notebook sheet; default cycles by id).
+public enum Covers {
+    public static let palette: [String] = [
+        "#D9534F", "#E8A3A0", "#EF8A62", "#F2894B", "#F0C24B", "#D8B44A", "#B5B04E", "#7FAE6B",
+        "#5FA8A0", "#3F7F8C", "#4A6FA5", "#7A88C0", "#9B8AC2", "#C77CA8", "#9A9A9A", "#2B2B2B"
+    ]
+    public static func pick(for id: String) -> String {
+        var h = 0
+        for u in id.unicodeScalars { h = (h * 31 + Int(u.value)) % 9973 }
+        return palette[h % palette.count]
+    }
+    /// Whether the cover is dark (label ink and speckle are toned for it).
+    public static func isDark(_ hex: String) -> Bool {
+        guard let c = HexColor.parse(hex) else { return false }
+        return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b < 0.5
+    }
+}
+
 public enum DateMode: String, Sendable, CaseIterable, Hashable {
     case created = "Created", modified = "Modified"
 }
@@ -75,7 +94,8 @@ public struct CalendarMonth: Sendable, Equatable {
         let days = cal.range(of: .day, in: .month, for: base)!.count
         let todayComps = cal.dateComponents([.year, .month, .day], from: now)
         var byDay: [Int: [Int]] = [:]
-        for (i, p) in document.pages.enumerated() {
+        // The cover (page 0) is not a dated entry, so it never appears on the calendar.
+        for (i, p) in document.pages.enumerated() where !(document.type == .journal && i == 0) {
             let d = mode == .modified ? p.modified : p.created
             let c = cal.dateComponents([.year, .month, .day], from: d)
             if c.year == year && c.month == month, let day = c.day { byDay[day, default: []].append(i) }

@@ -41,7 +41,7 @@ struct SettingsView: View {
     private var nav: some View {
         VStack(alignment: .leading, spacing: 2) {
             backButton.padding(.horizontal, 6).padding(.top, 4).padding(.bottom, 14)
-            Text("Settings").font(fnt(22, .bold)).foregroundStyle(theme.ink1).padding(.horizontal, 10).padding(.bottom, 16)
+            Text("Settings").font(titleFnt(22)).foregroundStyle(theme.ink1).padding(.horizontal, 10).padding(.bottom, 16)
             ForEach(SettingsTab.allCases, id: \.self) { t in
                 NavRow(label: t.label, symbol: t.symbol, active: app.settingsTab == t) {
                     app.settingsTab = t
@@ -63,7 +63,7 @@ struct GeneralSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Text("General").font(fnt(20, .bold)).foregroundStyle(theme.ink1)
+            Text("General").font(titleFnt(20)).foregroundStyle(theme.ink1)
             VStack(alignment: .leading, spacing: 6) {
                 SectionLabel(text: "Your name on comments")
                 FieldText(placeholder: "Name", text: Binding(get: { app.settings.author }, set: { app.settings.author = $0 }))
@@ -102,7 +102,7 @@ struct PalettesSettings: View {
             ScrollView {
                 VStack(spacing: 8) {
                     HStack {
-                        Text("Color palettes").font(fnt(20, .bold)).foregroundStyle(theme.ink1)
+                        Text("Color palettes").font(titleFnt(20)).foregroundStyle(theme.ink1)
                         Spacer()
                         PrimaryButton(label: "New", symbol: "plus", height: 34) {
                             let p = app.palettes.addNew()

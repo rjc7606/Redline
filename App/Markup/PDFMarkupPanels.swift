@@ -54,20 +54,15 @@ struct PDFCommentRow: View {
         let a = item.annotation
         let who = item.author == app.author ? "You" : item.author
         VStack(alignment: .leading, spacing: 4) {
+            // One meta line: colour · kind glyph · "You · 12h ago" · replies · page. Status lives in the context menu.
             HStack(spacing: 7) {
                 RoundedRectangle(cornerRadius: 2).fill(Color(hex: item.colorHex)).frame(width: 10, height: 10)
-                Image(systemName: commentSymbol(for: item.tool.rawValue)).font(fnt(13)).foregroundStyle(theme.ink3)
-                Text(item.tool.label + (item.tool.isPen && item.markCount > 1 ? " · \(item.markCount) strokes" : "")).font(fnt(13.5, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+                Image(systemName: commentSymbol(for: item.tool.rawValue)).font(fnt(14)).foregroundStyle(theme.ink3).help(item.tool.label)
+                Text("\(who) · \(Formatting.ago(item.time))").font(fnt(13, .medium)).foregroundStyle(theme.ink2).lineLimit(1)
                 Spacer(minLength: 2)
-                Text("p.\(item.pageIndex + 1)").font(fnt(11, .semibold)).foregroundStyle(theme.ink4)
-            }
-            HStack(spacing: 8) {
-                Text("\(who) · \(Formatting.ago(item.time))").font(fnt(12, .medium)).foregroundStyle(theme.ink4).lineLimit(1)
-                Spacer(minLength: 2)
-                if !item.replies.isEmpty { Text(Formatting.plural(item.replies.count, "reply", "replies")).font(fnt(11.5, .semibold)).foregroundStyle(theme.accent) }
-                Menu {
-                    ForEach(CommentStatus.allCases, id: \.self) { s in Button(s.rawValue) { editor.mkSetStatus(a, s) } }
-                } label: { StatusChip(status: item.status, height: 18) }
+                if !item.replies.isEmpty { Text(Formatting.plural(item.replies.count, "reply", "replies")).font(fnt(11.5, .semibold)).monospacedDigit().foregroundStyle(theme.accent) }
+                if item.status != .open { Circle().fill(theme.chip(for: item.status).fg).frame(width: 6, height: 6).help(item.status.rawValue) }
+                Text("p.\(item.pageIndex + 1)").font(fnt(11, .semibold)).monospacedDigit().foregroundStyle(theme.ink4)
             }
             if expanded {
                 if mk.editingComment {
@@ -126,6 +121,14 @@ struct PDFCommentRow: View {
             if expanded { mk.expandedComment = nil; mk.editingComment = false }
             else { mk.expandedComment = item.id; mk.editingComment = false; editor.mkSelectComment(item) }
         }
+        .contextMenu {
+            Section("Status · \(item.status.rawValue)") {
+                ForEach(CommentStatus.allCases, id: \.self) { s in
+                    Button { editor.mkSetStatus(a, s) } label: { if s == item.status { Label(s.rawValue, systemImage: "checkmark") } else { Text(s.rawValue) } }
+                }
+            }
+            Button("Delete", systemImage: "trash", role: .destructive) { editor.mkSelectComment(item); editor.mkDeleteSelection() }
+        }
         .animation(.easeOut(duration: 0.15), value: expanded)
     }
 }
@@ -161,8 +164,14 @@ struct PDFAnnotationPopup: View {
                     Text(item.tool.label + (item.markCount > 1 && item.tool.isPen ? " · \(item.markCount) strokes" : "")).font(fnt(15, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
                     Spacer(minLength: 4)
                     Menu {
-                        ForEach(CommentStatus.allCases, id: \.self) { s in Button(s.rawValue) { editor.mkSetStatus(a, s) } }
-                    } label: { StatusChip(status: item.status) }
+                        Section("Status · \(item.status.rawValue)") {
+                            ForEach(CommentStatus.allCases, id: \.self) { s in
+                                Button { editor.mkSetStatus(a, s) } label: { if s == item.status { Label(s.rawValue, systemImage: "checkmark") } else { Text(s.rawValue) } }
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis").font(fnt(14, .semibold)).foregroundStyle(theme.ink3).frame(width: 28, height: 28).background(Circle().fill(theme.hov))
+                    }
                     Button { editor.mkClosePopup() } label: {
                         Image(systemName: "xmark").font(fnt(12, .bold)).foregroundStyle(theme.ink3).frame(width: 28, height: 28).background(Circle().fill(theme.hov))
                     }.buttonStyle(.plain)
@@ -241,9 +250,9 @@ struct PDFAnnotationPopup: View {
             }
             .padding(14)
             .frame(width: width)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
-                .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-                .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y))
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(theme.popSolid)
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.line, lineWidth: 1))
+                .popShadow(theme))
             .offset(x: x, y: y)
             .popIn()
             .onAppear { if mk.focusComment { commentFocused = true; mk.focusComment = false } }
@@ -324,7 +333,7 @@ struct PDFOrganizePages: View {
         let sel = selected ?? editor.pageIndex
         VStack(spacing: 0) {
             HStack {
-                Text("Organize Pages").font(fnt(21, .heavy)).foregroundStyle(theme.ink1)
+                Text("Organize Pages").font(titleFnt(21)).foregroundStyle(theme.ink1)
                 Spacer()
                 PrimaryButton(label: "Done", height: 32) { editor.organizeOpen = false }
             }
@@ -448,9 +457,9 @@ struct PDFFieldInspector: View {
         }
         .padding(12)
         .frame(width: 262)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-            .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y))
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(theme.popSolid)
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.line, lineWidth: 1))
+            .popShadow(theme))
     }
 
     private func labelled<C: View>(_ label: String, @ViewBuilder _ c: () -> C) -> some View {

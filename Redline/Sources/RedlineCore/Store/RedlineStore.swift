@@ -132,6 +132,7 @@ public struct RedlineStore: Sendable {
         case .drawing:
             doc = Document(type: .drawing, name: name, created: now, pages: [.drawing(created: now)], paper: paper)
         case .journal:
+            // Page 0 is the cover: blank, drawable, rendered as the notebook's thumbnail.
             let cover = Page.journal(template: .blank, paper: paper == .white ? .grey : paper, created: now)
             doc = Document(type: .journal, name: name, created: now, pages: [cover, .journal(template: template, paper: paper, created: now)])
         }

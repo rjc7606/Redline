@@ -32,7 +32,7 @@ public enum DocumentType: String, Codable, Sendable, CaseIterable, Hashable {
     }
     /// Colour of the mode chip in the workspace top bar: (foreground, background alpha)
     public var modeChipHex: (fg: String, bgAlpha: Double) {
-        switch self { case .markup: ("#e8483f", 0.12); case .drawing: ("#AF52DE", 0.12); case .journal: ("#34C759", 0.14) }
+        switch self { case .markup: ("#C4554A", 0.12); case .drawing: ("#8B6BB1", 0.12); case .journal: ("#5B9A6B", 0.14) }
     }
     public var symbol: String {
         switch self { case .markup: "doc.text"; case .drawing: "ruler"; case .journal: "book.closed" }
@@ -359,9 +359,13 @@ public struct Document: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var folder: String?
     public var favorite: Bool?
     public var lastOpened: Date?
+    /// Notebook cover colour (hex). Optional so older data decodes; falls back to a palette pick by id.
+    public var coverColor: String?
 
     public var folderPath: String { folder ?? "" }
     public var isFavorite: Bool { favorite ?? false }
+    /// The notebook cover colour, always resolved.
+    public var coverHex: String { coverColor ?? Covers.pick(for: id) }
 
     public init(id: ID = IDGen.make(), type: DocumentType, name: String, created: Date = Date(), modified: Date? = nil,
                 pages: [Page], comments: [Comment] = [], paper: Paper = .white, pdfFile: String? = nil, bookmarks: [ID] = [],

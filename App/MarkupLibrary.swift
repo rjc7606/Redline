@@ -37,7 +37,7 @@ struct HomeBrowser: View {
                 pane(compact: compact)
             }
         }
-        .background(theme.bg)
+        .background(GrainBackground(color: theme.bg))
         .fileImporter(isPresented: $importing, allowedContentTypes: [UTType.pdf], allowsMultipleSelection: true) { result in
             if case .success(let urls) = result { app.importPDFs(urls, into: currentFolder ?? "") }
         }
@@ -65,7 +65,7 @@ struct HomeBrowser: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
-                    Button { app.homeShelf = nil } label: { Text("Redline").font(fnt(22, .heavy)).foregroundStyle(theme.ink1) }.buttonStyle(.plain)
+                    Button { app.homeShelf = nil } label: { Text("Redline").font(titleFnt(22)).foregroundStyle(theme.ink1) }.buttonStyle(.plain)
                     Spacer()
                     BarButton(symbol: "gearshape", label: "Settings") { app.openSettings() }
                 }
@@ -111,7 +111,7 @@ struct HomeBrowser: View {
                         Circle().fill(type.tint).frame(width: 8, height: 8).frame(width: 20)
                         Text(type.shelfLabel).font(fnt(14, active ? .semibold : .medium)).foregroundStyle(active ? theme.ink1 : theme.ink2)
                         Spacer(minLength: 0)
-                        Text("\(app.store.documents(on: type).count)").font(fnt(11.5, .medium)).foregroundStyle(theme.ink4)
+                        Text("\(app.store.documents(on: type).count)").font(fnt(11.5, .medium)).monospacedDigit().foregroundStyle(theme.ink4)
                     }
                     .padding(.leading, 10).frame(height: 36).contentShape(Rectangle())
                 }.buttonStyle(.plain)
@@ -124,7 +124,7 @@ struct HomeBrowser: View {
             if open.wrappedValue {
                 ForEach(docs.prefix(6)) { d in
                     if type == .journal {
-                        NavRow(label: d.name, indent: 26, swatch: Color(hex: (d.pages.first?.paper ?? .cream).hex)) { app.openDocument(d.id) }
+                        NavRow(label: d.name, indent: 26, swatch: Color(hex: d.coverHex)) { app.openDocument(d.id) }
                     } else {
                         NavRow(label: d.name, symbol: "square.stack", indent: 26) { app.openDocument(d.id) }
                     }
@@ -236,7 +236,7 @@ struct HomeBrowser: View {
     private var recentsPane: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Recents").font(fnt(26, .heavy)).foregroundStyle(theme.ink1).padding(.bottom, 4)
+                Text("Recents").font(titleFnt(26)).foregroundStyle(theme.ink1).padding(.bottom, 4)
                 ForEach(DocumentType.allCases, id: \.self) { t in rail(t) }
             }
             .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 40)
@@ -249,7 +249,7 @@ struct HomeBrowser: View {
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 10) {
                 Circle().fill(type.tint).frame(width: 8, height: 8)
-                Text(type.railLabel).font(fnt(15, .bold)).foregroundStyle(theme.ink1)
+                Text(type.railLabel).font(fnt(15, .semibold)).foregroundStyle(theme.ink1)
                 Spacer()
                 SecondaryButton(label: "New", height: 30) { app.settings.shelf = type; app.newDraft = NewDocumentDraft(type: type) }
                 Button { seeAll(type) } label: {
@@ -338,21 +338,21 @@ struct HomeBrowser: View {
         HStack(spacing: 6) {
             switch app.library {
             case .recents:
-                Text("Recents").font(fnt(26, .heavy)).foregroundStyle(theme.ink1)
+                Text("Recents").font(titleFnt(26)).foregroundStyle(theme.ink1)
             case .favorites:
-                Text("Favorites").font(fnt(26, .heavy)).foregroundStyle(theme.ink1)
+                Text("Favorites").font(titleFnt(26)).foregroundStyle(theme.ink1)
             case .folder(let f):
                 let parts = f.isEmpty ? [] : f.split(separator: "/").map(String.init)
                 Text("On My iPad").font(fnt(15, .medium)).foregroundStyle(theme.accent)
                 Image(systemName: "chevron.right").font(fnt(12, .bold)).foregroundStyle(theme.ink4)
                 Button { go(.folder("")) } label: {
-                    Text("Redline").font(fnt(parts.isEmpty ? 26 : 15, parts.isEmpty ? .heavy : .medium)).foregroundStyle(parts.isEmpty ? theme.ink1 : theme.accent)
+                    Text("Redline").font(fnt(parts.isEmpty ? 26 : 15, parts.isEmpty ? .bold : .medium)).foregroundStyle(parts.isEmpty ? theme.ink1 : theme.accent)
                 }.buttonStyle(.plain)
                 ForEach(Array(parts.enumerated()), id: \.offset) { i, part in
                     let last = i == parts.count - 1
                     Image(systemName: "chevron.right").font(fnt(12, .bold)).foregroundStyle(theme.ink4)
                     Button { go(.folder(parts[0...i].joined(separator: "/"))) } label: {
-                        Text(part).font(fnt(last ? 26 : 15, last ? .heavy : .medium)).foregroundStyle(last ? theme.ink1 : theme.accent).lineLimit(1)
+                        Text(part).font(fnt(last ? 26 : 15, last ? .bold : .medium)).foregroundStyle(last ? theme.ink1 : theme.accent).lineLimit(1)
                     }.buttonStyle(.plain)
                 }
             }
@@ -395,7 +395,7 @@ struct HomeBrowser: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 HStack(spacing: 10) {
-                    Text(shelf.shelfLabel).font(fnt(26, .heavy)).foregroundStyle(theme.ink1)
+                    Text(shelf.shelfLabel).font(titleFnt(26)).foregroundStyle(theme.ink1)
                     Spacer()
                     SegmentControl(options: HomeSort.allCases.map { SegmentOption(value: $0, label: $0.rawValue) }, selection: $app.homeSort, fontSize: 13, vPad: 6, hPad: 12)
                     PrimaryButton(label: shelf.newLabel, symbol: "plus", tint: shelf.tint) { app.settings.shelf = shelf; app.newDraft = NewDocumentDraft(type: shelf) }
@@ -433,7 +433,7 @@ struct FolderTile: View {
                 }
                 .frame(width: Metrics.docTile, height: 96)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(RedlineStore.name(of: path)).font(fnt(13, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+                    Text(RedlineStore.name(of: path)).font(fnt(13, .medium)).foregroundStyle(theme.ink1).lineLimit(1)
                     Text(Formatting.plural(count, "file")).font(fnt(11.5, .medium)).foregroundStyle(theme.ink4)
                 }
             }
