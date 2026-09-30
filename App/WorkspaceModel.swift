@@ -293,7 +293,7 @@ final class WorkspaceModel {
     }
     func pinch(by factor: Double) { zoom = min(Metrics.maxZoom, max(Metrics.minZoom, zoom * factor)) }
     func panBy(_ d: CGSize) {
-        if isPDF { mk.activeInk = nil; return }
+        if isPDF { mk.activeInk = nil; mk.activeInkRoot = nil; return }
         pan = CGSize(width: pan.width + d.width, height: pan.height + d.height)
         session = nil
     }
@@ -324,7 +324,7 @@ final class WorkspaceModel {
         previousTool = tool
         tool = t
         fingerInkAllowed = nil
-        if !keepSession { mk.activeInk = nil }
+        if !keepSession { mk.activeInk = nil; mk.activeInkRoot = nil }
         if t != .eraser { toolBeforeEraser = nil }
         if !keepSession { session = nil }
         if t != .select && t != .lasso { selection = []; selectedField = nil }
@@ -357,11 +357,15 @@ final class WorkspaceModel {
             if styleExpanded { styleTarget = .color }
         } else {
             app.styles.select(i, for: t)
+            // A different style starts a new annotation on the next stroke.
+            mk.activeInk = nil; mk.activeInkRoot = nil
+            session = nil
         }
     }
 
     func updateStyle(_ body: (inout StylePreset) -> Void) {
         app.styles.update(styleTool, body)
+        mk.activeInk = nil; mk.activeInkRoot = nil
     }
 
     /// Pencil double-tap: eraser ⇄ the pen you were using (or previous tool, per the system setting).
@@ -454,7 +458,7 @@ final class WorkspaceModel {
     func setPage(_ i: Int) {
         let n = max(0, min(pageCount - 1, i))
         scrollRequest = n
-        if isPDF { mk.scrollToPage = n; mk.activeInk = nil }
+        if isPDF { mk.scrollToPage = n; mk.activeInk = nil; mk.activeInkRoot = nil }
         guard n != pageIndex else { return }
         pageIndex = n
         session = nil

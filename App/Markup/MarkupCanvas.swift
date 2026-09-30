@@ -117,9 +117,10 @@ struct PDFViewRepresentable: UIViewRepresentable {
                 let direct = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
                 sv.panGestureRecognizer.allowedTouchTypes = direct
                 sv.pinchGestureRecognizer?.allowedTouchTypes = direct
+                // Free panning in any direction; vertical always rubber-bands, horizontal only when the page is wider than the view.
                 sv.alwaysBounceVertical = true
-                sv.alwaysBounceHorizontal = true
-                sv.isDirectionalLockEnabled = true
+                sv.alwaysBounceHorizontal = false
+                sv.isDirectionalLockEnabled = false
                 sv.delaysContentTouches = false
                 sv.canCancelContentTouches = true
                 offsetObservation = sv.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in

@@ -56,6 +56,7 @@ struct StylePopoverView: View {
     var apply: (((inout StylePreset) -> Void) -> Void)? = nil
     var forTool: Tool? = nil
     var showPresets = true
+    @State private var fontPickerOn = false
 
     var body: some View {
         let tool = forTool ?? editor.styleTool
@@ -94,20 +95,27 @@ struct StylePopoverView: View {
 
             if isText && target == .font {
                 SectionLabel(text: "Font").padding(.bottom, 8)
-                Menu {
-                    ForEach(Array(TextFonts.options.enumerated()), id: \.offset) { _, o in
-                        Button(o.label) { set { $0.font = o.name } }
+                HStack(spacing: 6) {
+                    Button { fontPickerOn = true } label: {
+                        HStack {
+                            Text(fontDisplayName(st.font)).font(textFont(st.font, size: 14, weight: st.fontWeight)).foregroundStyle(theme.ink1).lineLimit(1)
+                            Spacer()
+                            Image(systemName: "textformat").font(fnt(13, .semibold)).foregroundStyle(theme.ink4)
+                        }
+                        .padding(.horizontal, 12).frame(height: 38)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.card))
+                        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(theme.line, lineWidth: 1))
                     }
-                } label: {
-                    HStack {
-                        Text(TextFonts.label(for: st.font)).font(textFont(st.font, size: 14, weight: st.fontWeight)).foregroundStyle(theme.ink1)
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down").font(fnt(12, .semibold)).foregroundStyle(theme.ink4)
+                    .buttonStyle(.plain)
+                    if st.font != nil {
+                        Button { set { $0.font = nil } } label: {
+                            Image(systemName: "arrow.uturn.backward").font(fnt(13, .semibold)).foregroundStyle(theme.ink3).frame(width: 38, height: 38)
+                                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.card))
+                                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(theme.line, lineWidth: 1))
+                        }.buttonStyle(.plain).help("Back to the system font")
                     }
-                    .padding(.horizontal, 12).frame(height: 38)
-                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.card))
-                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(theme.line, lineWidth: 1))
                 }
+                .sheet(isPresented: $fontPickerOn) { FontPicker { name in set { $0.font = name } } }
                 .padding(.bottom, 12)
                 SectionLabel(text: "Weight").padding(.bottom, 8)
                 SegmentControl(options: TextWeight.allCases.map { SegmentOption(value: $0, label: $0.label) },

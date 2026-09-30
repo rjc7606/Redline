@@ -18,8 +18,8 @@ struct PagesScrollView: UIViewRepresentable {
         sv.delegate = context.coordinator
         sv.bounces = true
         sv.alwaysBounceVertical = true
-        sv.alwaysBounceHorizontal = true
-        sv.isDirectionalLockEnabled = true
+        sv.alwaysBounceHorizontal = false
+        sv.isDirectionalLockEnabled = false
         sv.delaysContentTouches = false
         sv.canCancelContentTouches = true
         sv.minimumZoomScale = 0.5

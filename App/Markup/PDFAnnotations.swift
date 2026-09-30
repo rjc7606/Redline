@@ -229,27 +229,34 @@ enum AnnotationFactory {
         return a
     }
 
+    /// Text box with Redline's own appearance (drawn on screen by `RedlineFreeText`, saved as an appearance stream).
     static func freeText(rect: CGRect, text: String, tool: Tool, style: StylePreset, author: String, fontSize: CGFloat? = nil) -> PDFAnnotation {
-        let a = PDFAnnotation(bounds: rect, forType: .freeText, withProperties: nil)
+        let a = RedlineFreeText(bounds: rect, forType: .freeText, withProperties: nil)
         let size = fontSize ?? CGFloat(10 + style.width)
         a.font = fontFor(style, size: size)
         a.fontColor = PDFColors.uiColor(style.color)
-        a.color = PDFColors.uiColor(style.borderColor ?? style.color, alpha: style.borderOpacity ?? 1)
-        if let bg = style.background, (style.backgroundOpacity ?? 1) > 0 { a.interiorColor = PDFColors.uiColor(bg, alpha: style.backgroundOpacity ?? 1) }
+        let bgAlpha = style.backgroundOpacity ?? 1
+        a.color = (style.background != nil && bgAlpha > 0) ? PDFColors.uiColor(style.background!, alpha: bgAlpha) : UIColor.clear
+        a.interiorColor = nil
         let border = PDFBorder(); border.lineWidth = CGFloat(style.borderWidth ?? 1); a.border = border
+        a.borderColorHex = style.borderColor ?? style.color
+        a.cornerRadius = 6
         a.contents = text
         a.alignment = .left
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
         stamp(a, tool: tool, author: author)
         return a
     }
 
+    /// Any installed font (family + weight); the appearance stream embeds it.
     static func fontFor(_ style: StylePreset, size: CGFloat) -> UIFont {
         let weight: UIFont.Weight
         switch style.fontWeight { case .regular: weight = .regular; case .medium: weight = .medium; case .bold: weight = .bold; default: weight = .semibold }
         if let name = style.font, !name.isEmpty {
-            let desc = UIFontDescriptor(fontAttributes: [.family: name])
-            let traits: UIFontDescriptor.SymbolicTraits = (style.fontWeight == .bold || style.fontWeight == .semibold) ? .traitBold : []
-            if let d = desc.withSymbolicTraits(traits), let f = UIFont(descriptor: d, size: size) as UIFont? { return f }
+            // A specific face picked from the device's fonts (PostScript name) is used as-is.
+            if let f = UIFont(name: name, size: size) { return f }
+            var desc = UIFontDescriptor(fontAttributes: [.family: name])
+            if style.fontWeight == .bold || style.fontWeight == .semibold, let bold = desc.withSymbolicTraits(.traitBold) { desc = bold }
             return UIFont(descriptor: desc, size: size)
         }
         return UIFont.systemFont(ofSize: size, weight: weight)
@@ -260,14 +267,17 @@ enum AnnotationFactory {
         let font = UIFont.systemFont(ofSize: 18, weight: .heavy)
         let size = (text as NSString).size(withAttributes: [.font: font])
         let rect = CGRect(x: center.x - size.width / 2 - 12, y: center.y - size.height / 2 - 6, width: size.width + 24, height: size.height + 12)
-        let a = PDFAnnotation(bounds: rect, forType: .freeText, withProperties: nil)
+        let a = RedlineFreeText(bounds: rect, forType: .freeText, withProperties: nil)
         a.font = font
         a.fontColor = PDFColors.uiColor(colorHex)
-        a.color = PDFColors.uiColor(colorHex)
-        a.interiorColor = UIColor.white.withAlphaComponent(0.85)
+        a.color = UIColor.white.withAlphaComponent(0.85)   // box fill
+        a.interiorColor = nil
         let border = PDFBorder(); border.lineWidth = 3; a.border = border
+        a.borderColorHex = colorHex
+        a.cornerRadius = 5
         a.contents = text
         a.alignment = .center
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
         stamp(a, tool: tool, author: author)
         return a
     }

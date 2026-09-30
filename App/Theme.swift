@@ -62,7 +62,8 @@ extension EnvironmentValues {
     }
 }
 
-/// Font for text boxes / callouts: optional family name plus weight (nil = system semibold).
+/// Font for text boxes / callouts: optional font (PostScript or family name, any font installed on the device)
+/// plus weight (nil = system semibold).
 func textFont(_ name: String?, size: Double, weight: TextWeight?) -> Font {
     let w: Font.Weight
     switch weight {
@@ -71,8 +72,51 @@ func textFont(_ name: String?, size: Double, weight: TextWeight?) -> Font {
     case .bold: w = .bold
     case .semibold, nil: w = .semibold
     }
-    if let name, !name.isEmpty { return Font.custom(name, size: size).weight(w) }
+    if let name, !name.isEmpty {
+        if let ui = UIFont(name: name, size: size) { return Font(ui as CTFont) }
+        return Font.custom(name, size: size).weight(w)
+    }
     return .system(size: size, weight: w)
+}
+
+/// "Avenir Next Demi Bold" for a stored font name; "System" when nil.
+func fontDisplayName(_ name: String?) -> String {
+    guard let name, !name.isEmpty else { return "System" }
+    if let f = UIFont(name: name, size: 12) {
+        let face = (f.fontDescriptor.object(forKey: .face) as? String) ?? ""
+        return face.isEmpty || face == "Regular" ? f.familyName : "\(f.familyName) \(face)"
+    }
+    return name
+}
+
+/// System font picker: every font on the device, including user-installed ones (which it also grants access to).
+struct FontPicker: UIViewControllerRepresentable {
+    var onPick: (String) -> Void
+
+    func makeUIViewController(context: Context) -> UIFontPickerViewController {
+        let config = UIFontPickerViewController.Configuration()
+        config.includeFaces = true
+        config.displayUsingSystemFont = false
+        let vc = UIFontPickerViewController(configuration: config)
+        vc.delegate = context.coordinator
+        return vc
+    }
+    func updateUIViewController(_ vc: UIFontPickerViewController, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    @MainActor
+    final class Coordinator: NSObject, UIFontPickerViewControllerDelegate {
+        let onPick: (String) -> Void
+        init(onPick: @escaping (String) -> Void) { self.onPick = onPick }
+        func fontPickerViewControllerDidPickFont(_ vc: UIFontPickerViewController) {
+            if let d = vc.selectedFontDescriptor {
+                let name = d.postscriptName.isEmpty ? ((d.object(forKey: .family) as? String) ?? "") : d.postscriptName
+                if !name.isEmpty { onPick(name) }
+            }
+            vc.dismiss(animated: true)
+        }
+        func fontPickerViewControllerDidCancel(_ vc: UIFontPickerViewController) { vc.dismiss(animated: true) }
+    }
 }
 
 /// System font at a point size (README type scale).

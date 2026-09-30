@@ -238,8 +238,8 @@ struct PDFTextEditor: View {
                 }.buttonStyle(.plain)
             }
             .padding(.horizontal, 6 * z).padding(.vertical, 3 * z)
-            .background(RoundedRectangle(cornerRadius: 3).fill(Color(uiColor: a.interiorColor ?? .white)))
-            .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(uiColor: a.color), lineWidth: max(1, (a.border?.lineWidth ?? 1) * z)))
+            .background(RoundedRectangle(cornerRadius: a.cornerRadius * z).fill(Color(uiColor: a.color)))
+            .overlay(RoundedRectangle(cornerRadius: a.cornerRadius * z).stroke(Color(hex: a.borderColorHex ?? "#000000"), lineWidth: (a.border?.lineWidth ?? 1) * z))
             .overlay(RoundedRectangle(cornerRadius: 3).stroke(theme.accent.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3])).padding(-3))
             .fixedSize(horizontal: false, vertical: true)
             .offset(x: r.minX, y: r.minY)

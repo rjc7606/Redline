@@ -42,6 +42,8 @@ final class MarkupState {
     @ObservationIgnored weak var pdfView: PDFView?
     var selected: [PDFAnnotation] = []
     var activeInk: PDFAnnotation? = nil
+    /// First Ink annotation of the current pen chain (group parent when colours change mid-chain).
+    var activeInkRoot: PDFAnnotation? = nil
     var live: LiveMark? = nil
     var lasso: [CGPoint] = []
     var marquee: CGRect? = nil
@@ -79,6 +81,7 @@ extension WorkspaceModel {
     func mkLoad() {
         guard type == .markup, let f = doc.pdfFile else { return }
         mk.pdf = app.pdf.document(f)
+        if let pdf = mk.pdf { AppearancePatcher.adoptTextBoxes(in: pdf) }
     }
 
     func mkMarkDirty() {
@@ -95,7 +98,12 @@ extension WorkspaceModel {
     func mkSaveNow() {
         guard mk.dirty, let f = doc.pdfFile, let pdf = mk.pdf else { return }
         mk.dirty = false
-        if pdf.write(to: app.pdf.url(for: f)) {
+        let url = app.pdf.url(for: f)
+        if pdf.write(to: url) {
+            // PDFKit can't write appearance streams: attach ours for text boxes in an incremental update.
+            var textBoxes: [PDFAnnotation] = []
+            for i in 0..<pdf.pageCount { if let p = pdf.page(at: i) { textBoxes += p.annotations.filter { $0.isRedlineTextBox } } }
+            AppearancePatcher.patch(fileURL: url, annotations: textBoxes)
             app.pdf.invalidateImages(f)
             app.patch(docID) { $0.modified = Date() }
         } else {
@@ -226,9 +234,10 @@ extension WorkspaceModel {
                 let group = mkGroup(of: a, on: page)
                 let tool = a.redlineTool
                 let text = tool == .textbox || tool == .callout || tool == .stamps || tool == .datestamp || tool == .initials ? "" : (a.contents ?? "")
+                let strokes = group.filter { $0.subtype == "Ink" }.reduce(0) { $0 + max(1, ($1.paths ?? []).count) }
                 out.append(MarkupComment(id: a.stableID, annotation: a, pageIndex: i, tool: tool, author: author, time: a.modificationDate ?? Date(),
                                          text: text, replies: replies, status: status, colorHex: PDFColors.hex(a.color),
-                                         markCount: a.subtype == "Ink" ? max(1, (a.paths ?? []).count) : group.count))
+                                         markCount: a.subtype == "Ink" ? strokes : group.count))
             }
         }
         return out.sorted { $0.pageIndex != $1.pageIndex ? $0.pageIndex < $1.pageIndex : $0.time > $1.time }
@@ -267,11 +276,17 @@ extension WorkspaceModel {
         let w = Double(a.border?.lineWidth ?? 2)
         var p = StylePreset(color: PDFColors.hex(a.color), width: w, opacity: a.opacityValue)
         if a.subtype == "FreeText" {
-            p.color = PDFColors.hex(a.fontColor ?? a.color)
+            p.color = PDFColors.hex(a.fontColor ?? .black)
             p.width = max(1, Double(a.font?.pointSize ?? 16) - 10)
-            p.borderColor = PDFColors.hex(a.color); p.borderOpacity = 1; p.borderWidth = w
-            if let ic = a.interiorColor { p.background = PDFColors.hex(ic); var al: CGFloat = 1; ic.getWhite(nil, alpha: &al); p.backgroundOpacity = Double(al) } else { p.backgroundOpacity = 0 }
-            if let f = a.font { p.font = f.familyName == UIFont.systemFont(ofSize: 10).familyName ? nil : f.familyName; p.fontWeight = f.fontDescriptor.symbolicTraits.contains(.traitBold) ? .bold : .semibold }
+            p.borderColor = a.borderColorHex ?? PDFColors.hex(a.fontColor ?? .black); p.borderOpacity = 1; p.borderWidth = w
+            var al: CGFloat = 0
+            a.color.getWhite(nil, alpha: &al)
+            if al > 0.01 { p.background = PDFColors.hex(a.color); p.backgroundOpacity = Double(al) } else { p.background = "#FFFFFF"; p.backgroundOpacity = 0 }
+            if let f = a.font {
+                let system = UIFont.systemFont(ofSize: 10).familyName
+                p.font = f.familyName == system ? nil : f.fontName
+                p.fontWeight = f.fontDescriptor.symbolicTraits.contains(.traitBold) || f.fontName.lowercased().contains("bold") ? .bold : .semibold
+            }
         }
         if a.subtype == "Square" || a.subtype == "Circle" {
             if let ic = a.interiorColor { p.fill = PDFColors.hex(ic); p.fillPattern = .solid; var al: CGFloat = 1; ic.getWhite(nil, alpha: &al); p.fillOpacity = Double(al) } else { p.fillPattern = FillPattern.none }
@@ -285,9 +300,11 @@ extension WorkspaceModel {
         if a.subtype == "FreeText" {
             a.fontColor = PDFColors.uiColor(p.color)
             a.font = AnnotationFactory.fontFor(p, size: CGFloat(10 + p.width))
-            a.color = PDFColors.uiColor(p.borderColor ?? p.color, alpha: p.borderOpacity ?? 1)
-            if let bg = p.background, (p.backgroundOpacity ?? 1) > 0 { a.interiorColor = PDFColors.uiColor(bg, alpha: p.backgroundOpacity ?? 1) } else { a.interiorColor = nil }
+            let bgAlpha = p.backgroundOpacity ?? 1
+            a.color = (p.background != nil && bgAlpha > 0) ? PDFColors.uiColor(p.background!, alpha: bgAlpha) : UIColor.clear
+            a.interiorColor = nil
             let b = PDFBorder(); b.lineWidth = CGFloat(p.borderWidth ?? 1); a.border = b
+            a.borderColorHex = p.borderColor ?? p.color
         } else {
             a.color = PDFColors.uiColor(p.color)
             let b = PDFBorder()
@@ -427,7 +444,7 @@ extension WorkspaceModel {
 
     func mkPointerDown(_ s: PointerSample, page: PDFPage, at p: CGPoint) {
         let i = mk.index(of: page)
-        if i != pageIndex { pageIndex = i; mk.activeInk = nil }
+        if i != pageIndex { pageIndex = i; mk.activeInk = nil; mk.activeInkRoot = nil }
         mkCommitTextEdit()
         closePopovers()
         mkDragMoved = false
@@ -446,7 +463,7 @@ extension WorkspaceModel {
         if s.isPencil, info.kind == .ink { _ = mkFingerMayInk(deciding: true) }
         let fingerTapTool = !s.isPencil && (info.isTap || info.kind == .fill)
         if info.kind == .none || fingerBlocked || fingerTapTool {
-            mk.activeInk = nil
+            mk.activeInk = nil; mk.activeInkRoot = nil
             mkDrag = .pan
             return
         }
@@ -667,19 +684,41 @@ extension WorkspaceModel {
         switch live.tool.kind {
         case .ink:
             let pts = live.points
-            if live.tool.isPen, let ink = mk.activeInk, ink.page === page, ink.redlineTool == live.tool, mk.pdf?.index(for: page) == pageIndex {
+            // Chain into the open Ink annotation only while the style is identical (one annotation = one colour/width).
+            let sameStyle: Bool = {
+                guard let ink = mk.activeInk else { return false }
+                let sameColor = HexColor.same(PDFColors.hex(ink.color), st.color)
+                let sameWidth = abs(Double(ink.border?.lineWidth ?? 0) - st.width) < 0.05
+                let sameOpacity = abs(ink.opacityValue - (st.opacity ?? 1)) < 0.01
+                return sameColor && sameWidth && sameOpacity
+            }()
+            let chainOpen = live.tool.isPen && mk.activeInk != nil && mk.activeInk?.page === page && mk.activeInk?.redlineTool == live.tool && mk.pdf?.index(for: page) == pageIndex
+            if chainOpen, sameStyle, let ink = mk.activeInk {
                 mkPerform(.change(annots: [(ink, AnnotationSnapshot(ink))]), alreadyApplied: true)
                 AnnotationFactory.append(path: pts, to: ink)
                 mkMarkDirty()
+            } else if chainOpen, let root = mk.activeInkRoot ?? mk.activeInk {
+                // Different colour / width in the same chain: a new Ink annotation grouped with the first
+                // (PDF "RT /Group"), so readers show one comment with several colours.
+                let a = AnnotationFactory.ink(paths: [pts], tool: live.tool, style: st, author: author)
+                var gid = root.value(forAnnotationKey: .redlineGroup) as? String
+                if gid == nil { gid = IDGen.make(); root.setValue(NSString(string: gid!), forAnnotationKey: .redlineGroup) }
+                a.setValue(NSString(string: gid!), forAnnotationKey: .redlineGroup)
+                a.setValue(root, forAnnotationKey: .inReplyTo)
+                a.setValue(NSString(string: "/Group"), forAnnotationKey: .replyType)
+                mkPerform(.add(page: page, annots: [a]))
+                mk.activeInk = a
+                mk.activeInkRoot = root
             } else {
                 let a = AnnotationFactory.ink(paths: [pts], tool: live.tool, style: st, author: author)
                 mkPerform(.add(page: page, annots: [a]))
                 mk.activeInk = live.tool.isPen ? a : nil
+                mk.activeInkRoot = live.tool.isPen ? a : nil
             }
         case .highlight, .textMarkup:
             guard !live.quads.isEmpty else { app.flash("No text under the \(live.tool.label.lowercased())"); return }
             mkPerform(.add(page: page, annots: [AnnotationFactory.textMarkup(quads: live.quads, tool: live.tool, style: st, author: author)]))
-            mk.activeInk = nil
+            mk.activeInk = nil; mk.activeInkRoot = nil
         case .shape:
             guard live.points.count >= 2 else { return }
             let a = live.points[0], b = live.points[live.points.count - 1]
@@ -716,7 +755,7 @@ extension WorkspaceModel {
             }
             guard !annots.isEmpty else { return }
             mkPerform(.add(page: page, annots: annots))
-            mk.activeInk = nil
+            mk.activeInk = nil; mk.activeInkRoot = nil
         default:
             break
         }
@@ -811,7 +850,7 @@ extension WorkspaceModel {
             mk.eraseSnapshotTaken = true
         }
         if !removed.isEmpty { removed.forEach { page.removeAnnotation($0) }; mk.undoStack.append(.remove(page: page, annots: removed)) }
-        if mk.activeInk.map({ removed.contains($0) }) == true { mk.activeInk = nil }
+        if mk.activeInk.map({ removed.contains($0) }) == true { mk.activeInk = nil; mk.activeInkRoot = nil }
         mkMarkDirty()
     }
 
@@ -846,10 +885,9 @@ extension WorkspaceModel {
         te.annotation.contents = txt
         // Grow the box to fit the text.
         let font = te.annotation.font ?? UIFont.systemFont(ofSize: 16)
-        let size = (txt as NSString).boundingRect(with: CGSize(width: 480, height: 2000), options: [.usesLineFragmentOrigin], attributes: [.font: font], context: nil).size
+        let size = TextBoxRenderer.fittingSize(text: txt, font: font)
         let b = te.annotation.bounds
-        let h = size.height + 8
-        te.annotation.bounds = CGRect(x: b.minX, y: b.maxY - h, width: max(60, size.width + 16), height: h)
+        te.annotation.bounds = CGRect(x: b.minX, y: b.maxY - size.height, width: max(60, size.width), height: size.height)
         te.annotation.modificationDate = Date()
         te.annotation.dropAppearance()
         if te.annotation.redlineTool == .callout { mkRelayoutLeader(for: te.annotation, on: te.page) }

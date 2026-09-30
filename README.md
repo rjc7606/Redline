@@ -55,17 +55,20 @@ swift test
   lines (PDFKit selection); pages without text fall back to a freehand band.
 - The Pen responds to Apple Pencil pressure in Drawings and Notes; Markups use Fineliner, Felt tip and Marker
   (constant-width PDF Ink annotations).
-- With no tool selected a finger moves the page (locked to the first direction it moves; two fingers pan freely
-  and pinch to zoom). After a pen is picked, the first touch decides: a finger first lets fingers ink; the Pencil
+- With no tool selected a finger moves the page in any direction (two fingers pan and pinch to zoom). After a pen is picked, the first touch decides: a finger first lets fingers ink; the Pencil
   first makes fingers pan. Every other tool works with a finger; with a tap tool (stamp, note, text, field,
   fill) a finger that moves pans instead, and the tap only fires on a clean lift. Settings › Finger drawing overrides this
   (Auto / Always / Never). Only fingers move or rotate the ruler; Pencil touches over it draw.
   The Select tool (pinned beside Organize Pages) selects with a tap, a diagonal box drag, or a lasso.
-- Text boxes and callouts have a Font tab (family, weight, size, colour); placing a sticky note opens its comment for typing.
+- Text boxes, callouts and stamps have their own look (rounded corners, any installed font, real border colour).
+  It is drawn on screen by a PDFAnnotation subclass and written into the PDF as an appearance stream (a form
+  XObject with the font embedded) through a small incremental-update writer, so every reader shows it identically.
+- Text boxes and callouts have a Font tab (any font on the device via the system font picker, including
+  user-installed fonts; weight, size, colour); placing a sticky note opens its comment for typing.
 - Tapping an annotation (or its comment in the sidebar) opens a popup beside it with the comment, status, replies
   and a Properties editor that restyles the annotation itself. Annotations with comment text show a small badge.
-- Markup and drawing pages stack in a native vertical scroll: rubber-band bounce back to a 24 pt margin on all
-  sides, direction-locked finger scrolling, finger pinch-zoom (re-rendered sharp when the pinch ends); the Pencil
+- Markup and drawing pages stack in a native vertical scroll: free panning in any direction with rubber-band
+  bounce (vertically always, horizontally when the page is wider than the view), finger pinch-zoom; the Pencil
   never scrolls. Zoomed-out pages are centred with the larger margins that leaves.
 - PDF pages render on a background queue; a neutral placeholder shows until each page image is ready.
 - The eraser cuts only the touched part out of ink strokes; its four presets are sizes.

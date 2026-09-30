@@ -135,7 +135,20 @@ public enum TextFonts {
         ("System", nil), ("Helvetica Neue", "Helvetica Neue"), ("Avenir Next", "Avenir Next"), ("Georgia", "Georgia"),
         ("Times New Roman", "Times New Roman"), ("Courier New", "Courier New"), ("Marker Felt", "Marker Felt"), ("Chalkboard", "Chalkboard SE")
     ]
-    public static func label(for name: String?) -> String { options.first { $0.name == name }?.label ?? (name ?? "System") }
+    public static func label(for name: String?) -> String { (options + pdfOptions).first { $0.name == name }?.label ?? (name ?? "System") }
+
+    /// Fonts every PDF reader can show without embedding (the standard base-14 families).
+    public static let pdfOptions: [(label: String, name: String?)] = [
+        ("Helvetica", nil), ("Times", "Times New Roman"), ("Courier", "Courier New")
+    ]
+    /// Standard PDF font name for a family + weight (used for FreeText annotations).
+    public static func pdfFontName(for name: String?, bold: Bool) -> String {
+        switch name {
+        case "Times New Roman", "Georgia": return bold ? "Times-Bold" : "Times-Roman"
+        case "Courier New": return bold ? "Courier-Bold" : "Courier"
+        default: return bold ? "Helvetica-Bold" : "Helvetica"
+        }
+    }
 }
 
 // MARK: - Structs
