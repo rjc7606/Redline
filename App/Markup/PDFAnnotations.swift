@@ -171,7 +171,8 @@ enum AnnotationFactory {
         let sub: PDFAnnotationSubtype = tool == .highlighter ? .highlight : (tool == .underline ? .underline : (tool == .strike ? .strikeOut : PDFAnnotationSubtype(rawValue: "/Squiggly")))
         var b = quads[0]
         for q in quads { b = b.union(q) }
-        let a = PDFAnnotation(bounds: b, forType: sub, withProperties: nil)
+        let a = RedlineMarkup(bounds: b, forType: sub, withProperties: nil)
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
         a.color = PDFColors.uiColor(style.color)
         var pts: [NSValue] = []
         for q in quads {

@@ -156,7 +156,7 @@ struct PDFAnnotationPopup: View {
             let fw = v.bounds.width
             // Visible height: the keyboard may cover the bottom of the view.
             let fh = max(200, v.bounds.height - mk.keyboardOverlap)
-            let est: CGFloat = min(560, 190 + CGFloat(item.replies.count) * 44 + (mk.replyFieldOpen ? 48 : 0) + (mk.annotationProps ? 360 : 0))
+            let est: CGFloat = min(560, 190 + CGFloat(item.replies.count) * 44 + (mk.replyFieldOpen ? 48 : 0))
             let x = min(max(8, r.midX - width / 2), max(8, fw - width - 8))
             let below = r.maxY + 14 + est <= fh || r.minY - est - 14 < 8
             // Never off the bottom (or under the keyboard): slide up over the annotation if it must.
@@ -224,13 +224,8 @@ struct PDFAnnotationPopup: View {
                                 .onSubmit { editor.mkAddReply(a); mk.replyFieldOpen = false }
                                 .onAppear { replyFocused = true }
                         }
-                        // 6. Footer: Properties ⌄ · Reply · trash
+                        // 6. Footer: Reply · trash (styling lives in the selection bar's Properties)
                         HStack(spacing: 12) {
-                            if !a.isWidget {
-                                SecondaryButton(label: "Properties", symbol: "slider.horizontal.3", height: 32, chevron: true, open: mk.annotationProps) {
-                                    withAnimation(.easeOut(duration: 0.15)) { mk.annotationProps.toggle() }
-                                }
-                            }
                             Spacer()
                             Button(mk.replyFieldOpen ? "Send" : "Reply") {
                                 if mk.replyFieldOpen { editor.mkAddReply(a); mk.replyFieldOpen = false } else { mk.replyFieldOpen = true }
@@ -242,22 +237,6 @@ struct PDFAnnotationPopup: View {
                             }.buttonStyle(.plain).accessibilityLabel("Delete")
                         }
                         .frame(height: 32)
-                        // 7. Properties: the Style editor, embedded
-                        if mk.annotationProps, let preset = editor.mkSelectedPreset(), let tool = editor.mkSelectedTool {
-                            Rectangle().fill(theme.line).frame(height: 1).padding(.top, 2)
-                            if let f = editor.mkSelectedFill {
-                                HStack(spacing: 8) {
-                                    RoundedRectangle(cornerRadius: 4).fill(Color(uiColor: f.annotation.interiorColor ?? .clear).opacity(f.isPolygon ? f.annotation.opacityValue : 1)).frame(width: 18, height: 18)
-                                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.line, lineWidth: 1))
-                                    Text("Fill").font(fnt(13, .medium)).foregroundStyle(theme.ink2)
-                                    Spacer()
-                                    SecondaryButton(label: "Remove fill", symbol: "drop.slash", height: 30) { editor.mkRemoveFill() }
-                                }
-                            }
-                            StylePopoverView(editor: editor, stroke: preset, apply: { body in editor.mkUpdateSelectedStyle(body) }, forTool: tool, showPresets: false, embedded: true)
-                                .frame(width: width - 28)
-                                .padding(.top, 2)
-                        }
                     }
                 }
                 .frame(maxHeight: 560 - 28 - 36)

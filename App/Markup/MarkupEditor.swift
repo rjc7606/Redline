@@ -56,6 +56,8 @@ final class MarkupState {
     var replyDraft = ""
     /// Popup: the reply field shows only after tapping Reply.
     var replyFieldOpen = false
+    /// Selection bar: the Properties editor dropped under it.
+    var selectionProps = false
     /// Comments sidebar: the expanded row (stable id) and whether its text is being edited.
     var expandedComment: String? = nil
     var editingComment = false
@@ -83,6 +85,8 @@ final class MarkupState {
     /// Eraser outline while erasing (page space).
     var eraserPoint: CGPoint? = nil
     var eraserPage: PDFPage? = nil
+    /// `mkComments()` result for the current render tick and filter (rebuilding it per view body was seconds on busy pages).
+    @ObservationIgnored var commentsCache: (tick: Int, filter: AuthorFilter, items: [MarkupComment])? = nil
 
     var selectedPrimary: PDFAnnotation? { selected.first { $0.isPrimary } ?? selected.first }
     var pageCount: Int { pdf?.pageCount ?? 0 }
@@ -118,7 +122,7 @@ extension WorkspaceModel {
         if pdf.write(to: url) {
             // PDFKit can't write appearance streams: attach ours for text boxes in an incremental update.
             var textBoxes: [PDFAnnotation] = []
-            for i in 0..<pdf.pageCount { if let p = pdf.page(at: i) { textBoxes += p.annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || WidgetRenderer.wantsAppearance($0) } } }
+            for i in 0..<pdf.pageCount { if let p = pdf.page(at: i) { textBoxes += p.annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || WidgetRenderer.wantsAppearance($0) } } }
             AppearancePatcher.patch(fileURL: url, annotations: textBoxes)
             app.pdf.invalidateImages(f)
             app.patch(docID) { $0.modified = Date() }
@@ -183,6 +187,11 @@ extension WorkspaceModel {
         return page.annotations.filter { ($0.value(forAnnotationKey: .redlineGroup) as? String) == gid }
     }
 
+    /// Highlights, underlines, strikeouts and squiggles are anchored to the page text: never moved or resized.
+    func mkIsLocked(_ a: PDFAnnotation) -> Bool { ["Highlight", "Underline", "StrikeOut", "Squiggly"].contains(a.subtype) }
+    /// The selected annotations that may move / resize.
+    var mkMovableSelection: [PDFAnnotation] { mk.selected.filter { !mkIsLocked($0) } }
+
     /// Our own hit test (PDFKit's ignores grouped children and uses loose bounds): topmost annotation under `p`,
     /// and for Ink the index of the path that was actually touched.
     func mkAnnotation(at p: CGPoint, page: PDFPage) -> (annotation: PDFAnnotation, pathIndex: Int?)? {
@@ -237,6 +246,7 @@ extension WorkspaceModel {
         mk.annotationPopup = false
         mk.annotationProps = false
         mk.replyFieldOpen = false
+        mk.selectionProps = false
         mk.styleSnapshotTaken = false
         mk.replyDraft = ""
         mk.renderTick += 1
@@ -246,6 +256,7 @@ extension WorkspaceModel {
         mk.selected = []
         mk.annotationPopup = false
         mk.annotationProps = false
+        mk.selectionProps = false
         mk.styleSnapshotTaken = false
         mk.renderTick += 1
     }
@@ -279,12 +290,24 @@ extension WorkspaceModel {
     // MARK: - Comments
 
     func mkComments() -> [MarkupComment] {
+        if let c = mk.commentsCache, c.tick == mk.renderTick, c.filter == authorFilter { return c.items }
         guard let pdf = mk.pdf else { return [] }
         var out: [MarkupComment] = []
         let me = app.author
         for i in 0..<pdf.pageCount {
             guard let page = pdf.page(at: i) else { continue }
             let annots = page.annotations
+            // One pass: replies and review states by parent, group members by group id.
+            var replies: [ObjectIdentifier: [PDFAnnotation]] = [:]
+            var states: [ObjectIdentifier: [PDFAnnotation]] = [:]
+            var groups: [String: [PDFAnnotation]] = [:]
+            for a in annots {
+                if let parent = a.value(forAnnotationKey: .inReplyTo) as? PDFAnnotation {
+                    if a.isReply { replies[ObjectIdentifier(parent), default: []].append(a) }
+                    else if a.isStateAnnotation { states[ObjectIdentifier(parent), default: []].append(a) }
+                }
+                if let gid = a.value(forAnnotationKey: .redlineGroup) as? String { groups[gid, default: []].append(a) }
+            }
             for a in annots where a.isPrimary && !a.isWidget {
                 let author = (a.userName ?? "").isEmpty ? "Unknown" : a.userName!
                 switch authorFilter {
@@ -292,21 +315,23 @@ extension WorkspaceModel {
                 case .mine: if author != me { continue }
                 case .others: if author == me { continue }
                 }
-                let kids = annots.filter { ($0.value(forAnnotationKey: .inReplyTo) as? PDFAnnotation) === a }
-                let replies = kids.filter { $0.isReply }.sorted { ($0.modificationDate ?? .distantPast) < ($1.modificationDate ?? .distantPast) }
+                let key = ObjectIdentifier(a)
+                let rs = (replies[key] ?? []).sorted { ($0.modificationDate ?? .distantPast) < ($1.modificationDate ?? .distantPast) }
                     .map { (author: ($0.userName ?? "").isEmpty ? "Unknown" : $0.userName!, time: $0.modificationDate ?? Date(), text: $0.contents ?? "") }
-                let states = kids.filter { $0.isStateAnnotation }.sorted { ($0.modificationDate ?? .distantPast) < ($1.modificationDate ?? .distantPast) }
-                let status = states.last.flatMap { AnnotationFactory.status(fromState: $0.value(forAnnotationKey: .state) as? String) } ?? .open
-                let group = mkGroup(of: a, on: page)
+                let st = (states[key] ?? []).sorted { ($0.modificationDate ?? .distantPast) < ($1.modificationDate ?? .distantPast) }
+                let status = st.last.flatMap { AnnotationFactory.status(fromState: $0.value(forAnnotationKey: .state) as? String) } ?? .open
+                let group = (a.value(forAnnotationKey: .redlineGroup) as? String).flatMap { groups[$0] } ?? [a]
                 let tool = a.redlineTool
-                let text = tool == .textbox || tool == .callout || tool == .stamps || tool == .datestamp || tool == .initials ? "" : (a.contents ?? "")
-                let strokes = group.filter { $0.subtype == "Ink" }.reduce(0) { $0 + max(1, ($1.paths ?? []).count) }
+                let text = tool.isTextual ? "" : (a.contents ?? "")
+                let strokes = group.filter { $0.subtype == "Ink" }.reduce(0) { $0 + max(1, $1.paths?.count ?? 1) }
                 out.append(MarkupComment(id: a.stableID, annotation: a, pageIndex: i, tool: tool, author: author, time: a.modificationDate ?? Date(),
-                                         text: text, replies: replies, status: status, colorHex: PDFColors.hex(a.color),
+                                         text: text, replies: rs, status: status, colorHex: PDFColors.hex(a.color),
                                          markCount: a.subtype == "Ink" ? strokes : group.count))
             }
         }
-        return out.sorted { $0.pageIndex != $1.pageIndex ? $0.pageIndex < $1.pageIndex : $0.time > $1.time }
+        let sorted = out.sorted { $0.pageIndex != $1.pageIndex ? $0.pageIndex < $1.pageIndex : $0.time > $1.time }
+        mk.commentsCache = (mk.renderTick, authorFilter, sorted)
+        return sorted
     }
 
     func mkSetText(_ a: PDFAnnotation, _ text: String) {
@@ -333,12 +358,23 @@ extension WorkspaceModel {
         mkPerform(.add(page: page, annots: [AnnotationFactory.stateAnnotation(for: a, status: s, author: app.author)]))
     }
 
+    /// Parents that have at least one reply on this page (one pass; pair with `mkHasComment(_:replied:)`).
+    func mkRepliedParents(on page: PDFPage) -> Set<ObjectIdentifier> {
+        var set = Set<ObjectIdentifier>()
+        for a in page.annotations where a.isReply {
+            if let parent = a.value(forAnnotationKey: .inReplyTo) as? PDFAnnotation { set.insert(ObjectIdentifier(parent)) }
+        }
+        return set
+    }
+
     /// Whether an annotation carries comment text or replies (drives the badge).
+    func mkHasComment(_ a: PDFAnnotation, replied: Set<ObjectIdentifier>) -> Bool {
+        if !a.redlineTool.isTextual, !(a.contents ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+        return replied.contains(ObjectIdentifier(a))
+    }
+
     func mkHasComment(_ a: PDFAnnotation, on page: PDFPage) -> Bool {
-        let t = a.redlineTool
-        let textual = t == .textbox || t == .callout || t == .stamps || t == .datestamp || t == .initials
-        if !textual, !(a.contents ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
-        return page.annotations.contains { $0.isReply && ($0.value(forAnnotationKey: .inReplyTo) as? PDFAnnotation) === a }
+        mkHasComment(a, replied: mkRepliedParents(on: page))
     }
 
     // MARK: - Style of the selection
@@ -532,13 +568,15 @@ extension WorkspaceModel {
         }
         // A finger on something already selected moves it (any tool) instead of panning.
         if !s.isPencil, !mk.selected.isEmpty, let a = mkAnnotation(at: p, page: page)?.annotation, mk.selected.contains(where: { $0 === a }) {
-            mkDrag = .move(start: p, snaps: mk.selected.map { ($0, AnnotationSnapshot($0)) })
+            let movable = mkMovableSelection
+            if movable.isEmpty { mkDrag = .pan; return }   // a highlight stays with its text
+            mkDrag = .move(start: p, snaps: movable.map { ($0, AnnotationSnapshot($0)) })
             mk.pendingTextEdit = (a.subtype == "FreeText") ? a : nil
             return
         }
         if info.kind != .select && info.kind != .lasso { mkClearSelection(); selectedField = nil }
-        // Finger on the ruler: move / rotate / lock. The Pencil passes through.
-        if !s.isPencil, let hit = mkRulerHit(p) {
+        // Finger or Pencil on the ruler: move / rotate / lock.
+        if let hit = mkRulerHit(p) {
             switch hit {
             case .body: mkDrag = .rulerMove(start: p, base: CGPoint(x: ruler.x, y: ruler.y))
             case .handle: mkDrag = .rulerRotate(a0: atan2(-(p.y - ruler.y), p.x - ruler.x) * 180 / .pi, r0: ruler.angle)
@@ -558,7 +596,9 @@ extension WorkspaceModel {
         case .select, .lasso:
             if let a = mkAnnotation(at: p, page: page)?.annotation {
                 if mk.selected.contains(where: { $0 === a }) {
-                    mkDrag = .move(start: p, snaps: mk.selected.map { ($0, AnnotationSnapshot($0)) })
+                    let movable = mkMovableSelection
+                    if movable.isEmpty { mkDrag = nil; return }
+                    mkDrag = .move(start: p, snaps: movable.map { ($0, AnnotationSnapshot($0)) })
                     mk.pendingTextEdit = (a.subtype == "FreeText") ? a : nil
                 } else {
                     mkSelectHit(at: p, page: page, splitStrokes: true)
@@ -790,8 +830,10 @@ extension WorkspaceModel {
     /// Resize handle (bottom-right of the selection) drag start.
     func mkBeginResize(at p: CGPoint) {
         guard let b = mkSelectionBounds else { return }
+        let movable = mkMovableSelection
+        guard !movable.isEmpty else { return }
         let c = CGPoint(x: b.midX, y: b.midY)
-        mkDrag = .resize(center: c, d0: max(4, hypot(p.x - c.x, p.y - c.y)), snaps: mk.selected.map { ($0, AnnotationSnapshot($0)) })
+        mkDrag = .resize(center: c, d0: max(4, hypot(p.x - c.x, p.y - c.y)), snaps: movable.map { ($0, AnnotationSnapshot($0)) })
         mkDragMoved = false
     }
 

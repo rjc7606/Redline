@@ -81,9 +81,12 @@ swift test
   its comment for typing.
 - With a finger, a clean tap on any annotation selects it whatever tool is active, and dragging a selected
   annotation moves it instead of panning.
-- Selecting an annotation shows a selection bar (Comment · Delete · ×); the Comment button, a badge tap or a sticky
-  note opens the popup beside it: comment, status, replies (the reply field appears after tapping Reply) and a
-  Properties editor that restyles the annotation itself. Annotations with comment text or replies show a speech-bubble
+- Selecting an annotation shows a bar beside it (N selected · Comment · Properties · Delete · ×). Properties drops
+  the style editor under the bar and restyles the selection itself; Comment (or a badge tap, or placing a sticky
+  note) opens the comment popup: text, status, replies (the reply field appears after tapping Reply).
+- Highlights, underlines, strikeouts and squiggles are drawn by Redline at their real opacity (PDFKit paints
+  highlights solid whatever the opacity says) and carry that look as an appearance stream. They are anchored to the
+  page text: selectable and restylable, never moved or resized. Annotations with comment text or replies show a speech-bubble
   badge in their own colour just above the ink; tapping it opens the popup. Sidebar rows expand in place to show the
   full text, Edit / Delete and replies.
 - Several documents can be open at once: a tabs row under the tool bar lists them (tap to switch, × to close).
@@ -93,7 +96,7 @@ swift test
   glyphs, a signature line); text-type fields also carry that look as an appearance stream, and the same tint and
   border go into the field's /MK colours for readers that draw fields themselves.
 - Markup and drawing pages stack in a native vertical scroll: free panning in any direction with rubber-band
-  bounce (vertically always, horizontally when the page is wider than the view), finger pinch-zoom; the Pencil
+  bounce along any axis where the content is larger than the view (a page that fits stays put), finger pinch-zoom; the Pencil
   never scrolls. Zoomed-out pages are centred with the larger margins that leaves.
 - PDF pages render on a background queue; a neutral placeholder shows until each page image is ready.
 - The eraser cuts only the touched part out of pen ink (shapes, arrows, clouds and leaders stay whole) and shows

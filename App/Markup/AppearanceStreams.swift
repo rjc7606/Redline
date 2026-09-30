@@ -69,6 +69,8 @@ extension PDFAnnotation {
     var isRedlineLine: Bool { subtype == "Line" && redlineID != nil }
     /// A form field drawn with Redline's look.
     var isRedlineWidget: Bool { subtype == "Widget" && redlineID != nil }
+    /// Highlight / underline / strikeout / squiggly drawn by Redline (PDFKit ignores their opacity).
+    var isRedlineMarkup: Bool { ["Highlight", "Underline", "StrikeOut", "Squiggly"].contains(subtype) && redlineID != nil }
 
     /// Polygon vertices in page space.
     var polygonVertices: [CGPoint] {
@@ -116,6 +118,75 @@ final class RedlineNote: PDFAnnotation {
         context.scaleBy(x: 1, y: -1)
         NoteRenderer.draw(color: color, size: bounds.size, in: context)
         context.restoreGState()
+    }
+}
+
+/// Text markup (highlight, underline, strikeout, squiggly) drawn at its real opacity; PDFKit's default draws
+/// highlights fully opaque whatever /CA says.
+final class RedlineMarkup: PDFAnnotation {
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        MarkupRenderer.draw(self, origin: bounds.origin, in: context)
+    }
+}
+
+enum MarkupRenderer {
+    /// Quads as (upper-left, upper-right, lower-left, lower-right) in page space.
+    static func quads(of a: PDFAnnotation) -> [[CGPoint]] {
+        let pts = (a.quadrilateralPoints as? [NSValue])?.map { $0.cgPointValue } ?? []
+        var out: [[CGPoint]] = []
+        var i = 0
+        while i + 3 < pts.count {
+            out.append((0..<4).map { CGPoint(x: pts[i + $0].x + a.bounds.minX, y: pts[i + $0].y + a.bounds.minY) })
+            i += 4
+        }
+        return out
+    }
+
+    /// Draws into a context whose origin is `origin` (page space, y up).
+    static func draw(_ a: PDFAnnotation, origin: CGPoint, in cg: CGContext) {
+        let qs = quads(of: a)
+        guard !qs.isEmpty else { return }
+        cg.saveGState()
+        cg.setAlpha(CGFloat(a.opacityValue))
+        cg.setFillColor(a.color.cgColor); cg.setStrokeColor(a.color.cgColor)
+        cg.setLineCap(.round)
+        for q in qs {
+            let ul = q[0], ur = q[1], ll = q[2]
+            let x0 = min(ul.x, ll.x) - origin.x, x1 = max(ur.x, q[3].x) - origin.x
+            let top = max(ul.y, ur.y) - origin.y, bottom = min(ll.y, q[3].y) - origin.y
+            let h = max(1, top - bottom)
+            switch a.subtype {
+            case "Highlight":
+                cg.setBlendMode(.multiply)
+                cg.fill(CGRect(x: x0, y: bottom, width: x1 - x0, height: h))
+            case "Underline":
+                cg.setLineWidth(max(1, h * 0.07))
+                cg.move(to: CGPoint(x: x0, y: bottom + h * 0.08)); cg.addLine(to: CGPoint(x: x1, y: bottom + h * 0.08)); cg.strokePath()
+            case "StrikeOut":
+                cg.setLineWidth(max(1, h * 0.08))
+                cg.move(to: CGPoint(x: x0, y: bottom + h * 0.5)); cg.addLine(to: CGPoint(x: x1, y: bottom + h * 0.5)); cg.strokePath()
+            default: // Squiggly
+                cg.setLineWidth(max(0.8, h * 0.06))
+                let amp = max(1, h * 0.09), step = amp * 2
+                var x = x0, up = false
+                cg.move(to: CGPoint(x: x, y: bottom))
+                while x < x1 { x = min(x1, x + step); cg.addLine(to: CGPoint(x: x, y: bottom + (up ? 0 : amp))); up.toggle() }
+                cg.strokePath()
+            }
+        }
+        cg.restoreGState()
+    }
+
+    static func appearancePDF(for a: PDFAnnotation) -> Data {
+        let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
+        let origin = a.bounds.origin
+        return UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+            c.beginPage()
+            let cg = c.cgContext
+            cg.translateBy(x: 0, y: size.height)
+            cg.scaleBy(x: 1, y: -1)
+            draw(a, origin: origin, in: cg)
+        }
     }
 }
 
@@ -450,7 +521,7 @@ enum TextBoxRenderer {
 enum AppearancePatcher {
     @discardableResult
     static func patch(fileURL: URL, annotations: [PDFAnnotation]) -> Bool {
-        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || WidgetRenderer.wantsAppearance($0) }
+        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || WidgetRenderer.wantsAppearance($0) }
         guard !ours.isEmpty, let data = try? Data(contentsOf: fileURL), let file = PDFFile(data: data) else { return ours.isEmpty }
         var byID: [String: (num: Int, dict: [String: PDFObj])] = [:]
         for page in file.pages() {
@@ -467,6 +538,7 @@ enum AppearancePatcher {
             else if a.isRedlinePolygon { helperData = PolygonRenderer.appearancePDF(for: a) }
             else if a.isRedlineLine { helperData = LineRenderer.appearancePDF(for: a) }
             else if a.isRedlineWidget { helperData = WidgetRenderer.appearancePDF(for: a) }
+            else if a.isRedlineMarkup { helperData = MarkupRenderer.appearancePDF(for: a) }
             else { helperData = TextBoxRenderer.appearancePDF(for: a) }
             guard let helper = PDFFile(data: helperData), let page = helper.pages().first else { continue }
             let importer = PDFObjectImporter(source: helper, firstFreeNumber: next)
@@ -515,7 +587,7 @@ enum AppearancePatcher {
     static func needsPromotion(_ a: PDFAnnotation) -> Bool {
         (a.isRedlineTextBox && !(a is RedlineFreeText)) || (a.isRedlineNote && !(a is RedlineNote))
             || (a.isRedlinePolygon && !(a is RedlinePolygon)) || (a.isRedlineLine && !(a is RedlineLine))
-            || (a.isRedlineWidget && !(a is RedlineWidget))
+            || (a.isRedlineWidget && !(a is RedlineWidget)) || (a.isRedlineMarkup && !(a is RedlineMarkup))
     }
 
     /// Promotes a group of annotations in place: same page order, same keys (including /AP), replies re-pointed.
@@ -531,6 +603,7 @@ enum AppearancePatcher {
             else if a.isRedlinePolygon { r = RedlinePolygon(bounds: a.bounds, forType: PDFAnnotationSubtype(rawValue: "/Polygon"), withProperties: a.annotationKeyValues) }
             else if a.isRedlineLine { r = RedlineLine(bounds: a.bounds, forType: .line, withProperties: a.annotationKeyValues) }
             else if a.isRedlineWidget { r = RedlineWidget(bounds: a.bounds, forType: .widget, withProperties: a.annotationKeyValues) }
+            else if a.isRedlineMarkup { r = RedlineMarkup(bounds: a.bounds, forType: PDFAnnotationSubtype(rawValue: "/" + a.subtype), withProperties: a.annotationKeyValues) }
             else { r = RedlineFreeText(bounds: a.bounds, forType: .freeText, withProperties: a.annotationKeyValues) }
             map[ObjectIdentifier(a)] = r
             page.addAnnotation(r)

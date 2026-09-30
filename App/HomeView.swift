@@ -72,7 +72,7 @@ struct DocTile<Extra: View>: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     if doc.isFavorite { Image(systemName: "star.fill").font(fnt(10)).foregroundStyle(Color(hex: "#FF9500")) }
-                    Text(doc.name).font(fnt(13, .medium)).foregroundStyle(theme.ink1).lineLimit(1).truncationMode(.middle)
+                    Text(doc.name).font(fnt(13, .semibold)).foregroundStyle(theme.ink1).lineLimit(1).truncationMode(.middle)
                 }
                 Text(meta).font(fnt(11.5, .medium)).foregroundStyle(theme.ink4).lineLimit(1)
                 if showFolder {

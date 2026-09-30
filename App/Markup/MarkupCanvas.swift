@@ -19,16 +19,49 @@ struct MarkupCanvas: View {
             if mk.annotationPopup, mk.textEdit == nil { PDFAnnotationPopup(editor: editor) }
         }
         .clipped()
-        .overlay(alignment: .top) {
-            if !mk.selected.isEmpty && !editor.organizeOpen {
-                // Selection bar (handoff v2): 40 tall, radius 12, one line, 12 pt gaps.
+        .overlay(alignment: .topLeading) {
+            if !mk.selected.isEmpty && !editor.organizeOpen { SelectionChrome(editor: editor) }
+        }
+    }
+}
+
+/// Floating bar beside the selection: "N selected" · Comment · Properties · Delete · ×. Properties drops the
+/// embedded style editor under the bar. Follows the selection as the page scrolls or zooms.
+struct SelectionChrome: View {
+    @Environment(\.theme) private var theme
+    var editor: WorkspaceModel
+
+    var body: some View {
+        let mk = editor.mk
+        let _ = mk.viewportTick
+        let _ = mk.renderTick
+        if let first = mk.selected.first, let page = first.page, let v = mk.pdfView, let b = editor.mkSelectionBounds {
+            let r = v.convert(b, from: page)
+            let fw = v.bounds.width, fh = max(200, v.bounds.height - mk.keyboardOverlap)
+            let primaries = mk.selected.filter(\.isPrimary).count
+            let isWidget = mk.selectedPrimary?.isWidget ?? false
+            let canComment = primaries == 1 && !mk.annotationPopup && !isWidget
+            let canStyle = !isWidget && editor.mkSelectedPreset() != nil
+            let barW: CGFloat = 96 + (canComment ? 106 : 0) + (canStyle ? 118 : 0) + 86 + 36
+            let x = min(max(8, r.midX - barW / 2), max(8, fw - barW - 8))
+            let above = r.minY - 14 - 40 >= 8
+            let y = above ? r.minY - 14 - 40 : min(r.maxY + 14, fh - 48)
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 12) {
-                    Text(mk.selected.filter(\.isPrimary).count <= 1 ? "1 selected" : "\(mk.selected.filter(\.isPrimary).count) selected")
-                        .font(fnt(13, .semibold)).foregroundStyle(theme.ink2)
-                    if mk.selected.filter(\.isPrimary).count == 1, !mk.annotationPopup, !(mk.selectedPrimary?.isWidget ?? false) {
-                        Button { mk.annotationPopup = true; mk.annotationProps = false; mk.focusComment = true } label: {
+                    Text(primaries <= 1 ? "1 selected" : "\(primaries) selected").font(fnt(13, .semibold)).foregroundStyle(theme.ink2)
+                    if canComment {
+                        Button { mk.selectionProps = false; mk.annotationPopup = true; mk.annotationProps = false; mk.focusComment = true } label: {
                             HStack(spacing: 5) { Image(systemName: "text.bubble").font(fnt(15, .medium)); Text("Comment").font(fnt(13, .semibold)) }
                                 .foregroundStyle(theme.ink1).frame(height: 40).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                    }
+                    if canStyle {
+                        Button { withAnimation(.easeOut(duration: 0.15)) { mk.selectionProps.toggle() } } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "slider.horizontal.3").font(fnt(15, .medium)); Text("Properties").font(fnt(13, .semibold))
+                                Image(systemName: "chevron.down").font(fnt(10, .bold)).rotationEffect(.degrees(mk.selectionProps ? 180 : 0))
+                            }
+                            .foregroundStyle(mk.selectionProps ? theme.accent : theme.ink1).frame(height: 40).contentShape(Rectangle())
                         }.buttonStyle(.plain)
                     }
                     Button { editor.mkDeleteSelection() } label: {
@@ -45,8 +78,32 @@ struct MarkupCanvas: View {
                 .fixedSize(horizontal: true, vertical: false)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.popSolid).shadow(color: theme.popShadow.opacity(0.6), radius: 9, y: 4))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.line, lineWidth: 1))
-                .padding(.top, 14)
+                if mk.selectionProps, let preset = editor.mkSelectedPreset(), let tool = editor.mkSelectedTool {
+                    ScrollView(showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if let f = editor.mkSelectedFill {
+                                HStack(spacing: 8) {
+                                    RoundedRectangle(cornerRadius: 4).fill(Color(uiColor: f.annotation.interiorColor ?? .clear).opacity(f.isPolygon ? f.annotation.opacityValue : 1)).frame(width: 18, height: 18)
+                                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.line, lineWidth: 1))
+                                    Text("Fill").font(fnt(13, .medium)).foregroundStyle(theme.ink2)
+                                    Spacer()
+                                    SecondaryButton(label: "Remove fill", symbol: "drop.slash", height: 30) { editor.mkRemoveFill() }
+                                }
+                            }
+                            StylePopoverView(editor: editor, stroke: preset, apply: { body in editor.mkUpdateSelectedStyle(body) }, forTool: tool, showPresets: false, embedded: true)
+                        }
+                        .padding(14)
+                    }
+                    .frame(width: 300)
+                    .frame(maxHeight: min(460, fh - y - 56))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(theme.popSolid)
+                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.line, lineWidth: 1))
+                        .popShadow(theme))
+                    .popIn()
+                }
             }
+            .offset(x: x, y: max(8, y))
         }
     }
 }
@@ -126,7 +183,7 @@ struct PDFViewRepresentable: UIViewRepresentable {
             offsetObservation = nil
             settingObservations.forEach { $0.invalidate() }
             settingObservations.removeAll()
-            if let v = overlay.pdfView, let sv = PDFViewRepresentable.scrollView(in: v) { sv.panGestureRecognizer.removeTarget(self, action: #selector(panChanged(_:))) }
+
             overlay.removeFromSuperview()
         }
 
@@ -161,27 +218,8 @@ struct PDFViewRepresentable: UIViewRepresentable {
                 ]
             }
             overlay.onLayout = { [weak self] in self?.reapplyScrolling() }
-            if let sv = PDFViewRepresentable.scrollView(in: v) { sv.panGestureRecognizer.addTarget(self, action: #selector(panChanged(_:))) }
             configureScrolling(v)
             ensureOverlay(in: v)
-        }
-
-        /// When a page is narrower (or shorter) than the view, PDFKit re-centres it the instant a drag ends instead of
-        /// letting UIScrollView rubber-band. Catch that jump and play it as a spring so every snap-back feels the same.
-        @objc private func panChanged(_ g: UIPanGestureRecognizer) {
-            guard g.state == .ended || g.state == .cancelled, let sv = g.view as? UIScrollView else { return }
-            let dragged = sv.contentOffset
-            let fitX = sv.contentSize.width <= sv.bounds.width + 0.5, fitY = sv.contentSize.height <= sv.bounds.height + 0.5
-            guard fitX || fitY else { return }
-            Task { @MainActor in
-                let rest = sv.contentOffset   // one run-loop later: PDFKit has already snapped if it was going to
-                let jumpX = fitX && abs(rest.x - dragged.x) > 1, jumpY = fitY && abs(rest.y - dragged.y) > 1
-                guard jumpX || jumpY else { return }
-                sv.setContentOffset(CGPoint(x: jumpX ? dragged.x : rest.x, y: jumpY ? dragged.y : rest.y), animated: false)
-                UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.82, initialSpringVelocity: 0.2, options: [.allowUserInteraction]) {
-                    sv.contentOffset = rest
-                }
-            }
         }
 
         private var reapplying = false
@@ -198,9 +236,10 @@ struct PDFViewRepresentable: UIViewRepresentable {
             let direct = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
             if sv.panGestureRecognizer.allowedTouchTypes != direct { sv.panGestureRecognizer.allowedTouchTypes = direct }
             if let pinch = sv.pinchGestureRecognizer, pinch.allowedTouchTypes != direct { pinch.allowedTouchTypes = direct }
-            // Free panning in any direction with rubber-band snap-back on every side.
-            if !sv.alwaysBounceVertical { sv.alwaysBounceVertical = true }
-            if !sv.alwaysBounceHorizontal { sv.alwaysBounceHorizontal = true }
+            // Rubber-band only along an axis where the content is larger than the view; a page that fits stays put.
+            let fitX = sv.contentSize.width <= sv.bounds.width + 0.5, fitY = sv.contentSize.height <= sv.bounds.height + 0.5
+            if sv.alwaysBounceVertical != !fitY { sv.alwaysBounceVertical = !fitY }
+            if sv.alwaysBounceHorizontal != !fitX { sv.alwaysBounceHorizontal = !fitX }
             if sv.isDirectionalLockEnabled { sv.isDirectionalLockEnabled = false }
             if sv.delaysContentTouches { sv.delaysContentTouches = false }
             if !sv.canCancelContentTouches { sv.canCancelContentTouches = true }
@@ -289,6 +328,21 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         editor.pencilDoubleTap()
     }
 
+    /// While this overlay owns a drag (moving a selection, a handle, the ruler, a marquee…) the scroll view must not
+    /// pan or zoom with the same finger. Disabling its recognisers cancels their tracking of the touch.
+    private func captureScroll(_ on: Bool) {
+        guard let v = pdfView, let sv = PDFViewRepresentable.scrollView(in: v) else { return }
+        if sv.panGestureRecognizer.isEnabled == on { sv.panGestureRecognizer.isEnabled = !on }
+        if let p = sv.pinchGestureRecognizer, p.isEnabled == on { p.isEnabled = !on }
+    }
+
+    private var overlayOwnsDrag: Bool {
+        switch editor.mkDrag {
+        case nil, .pan?, .polyTap?: return false
+        default: return true
+        }
+    }
+
     // MARK: coordinates
 
     private func pageAndPoint(for location: CGPoint) -> (PDFPage, CGPoint)? {
@@ -342,6 +396,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                 case .resize: editor.mkBeginResize(at: p)
                 case .leader(let leader, let idx): editor.mkBeginLeaderHandle(leader, index: idx)
                 }
+                captureScroll(true)
                 return
             }
             if let a = badgeHit(at: s.location, page: page) {
@@ -355,11 +410,14 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                 return
             }
             editor.mkPointerDown(s, page: page, at: p)
+            if overlayOwnsDrag { captureScroll(true) }
             setNeedsDisplay()
         } else if active != nil {
+            // A second finger: give the touch back to the scroll view (pinch / two-finger pan).
             active = nil
             dragPage = nil
             editor.mkPointerCancel()
+            captureScroll(false)
             setNeedsDisplay()
         }
     }
@@ -380,6 +438,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         let s = sample(t)
         if let page = dragPage, let (_, p) = pageAndPoint(for: s.location) { editor.mkPointerUp(s, page: page, at: p) }
         dragPage = nil
+        captureScroll(false)
         setNeedsDisplay()
     }
 
@@ -388,6 +447,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         active = nil
         dragPage = nil
         editor.mkPointerCancel()
+        captureScroll(false)
         setNeedsDisplay()
     }
 
@@ -395,7 +455,8 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
 
     /// The "has a comment" badge under a touch, if any.
     private func badgeHit(at loc: CGPoint, page: PDFPage) -> PDFAnnotation? {
-        for a in page.annotations where a.isPrimary && !a.isWidget && editor.mkHasComment(a, on: page) {
+        let replied = editor.mkRepliedParents(on: page)
+        for a in page.annotations where a.isPrimary && !a.isWidget && editor.mkHasComment(a, replied: replied) {
             let c = badgeCenter(for: a, on: page)
             if hypot(loc.x - c.x, loc.y - c.y) <= 16 * unit { return a }
         }
@@ -421,7 +482,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                 if hypot(loc.x - elbow.x, loc.y - elbow.y) <= 18 * u { return .leader(leader, 1) }
             }
         }
-        if let b = editor.mkSelectionBounds {
+        if let b = editor.mkSelectionBounds, !editor.mkMovableSelection.isEmpty {
             let r = overlayRect(b, on: page)
             let u = unit
             let h = CGPoint(x: r.maxX + 8 * u, y: r.maxY + 8 * u)
@@ -530,7 +591,8 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
 
         // Comment badges on annotations that carry text or replies
         for page in visiblePages(v) {
-            for a in page.annotations where a.isPrimary && !a.isWidget && editor.mkHasComment(a, on: page) {
+            let replied = editor.mkRepliedParents(on: page)
+            for a in page.annotations where a.isPrimary && !a.isWidget && editor.mkHasComment(a, replied: replied) {
                 drawBadge(cg, at: badgeCenter(for: a, on: page), color: a.color, u: u)
             }
         }
@@ -540,7 +602,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             cg.saveGState()
             cg.setStrokeColor(accent.cgColor); cg.setLineWidth(2 * u)
             for a in mk.selected { cg.stroke(overlayRect(a.bounds, on: page).insetBy(dx: -3 * u, dy: -3 * u)) }
-            if let b = editor.mkSelectionBounds {
+            if let b = editor.mkSelectionBounds, !editor.mkMovableSelection.isEmpty {
                 let r = overlayRect(b, on: page)
                 drawHandle(cg, at: CGPoint(x: r.maxX + 8 * u, y: r.maxY + 8 * u), accent: accent, u: u)
                 if let box = mk.selected.first(where: { $0.redlineTool == .callout && $0.subtype == "FreeText" }), let leader = editor.mkLeader(for: box, on: page) {
