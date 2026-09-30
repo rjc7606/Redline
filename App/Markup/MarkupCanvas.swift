@@ -77,6 +77,10 @@ struct PDFViewRepresentable: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(editor: editor) }
 
+    static func dismantleUIView(_ uiView: PDFView, coordinator: Coordinator) {
+        coordinator.detach()
+    }
+
     @MainActor
     final class Coordinator: NSObject {
         var editor: WorkspaceModel
@@ -91,9 +95,13 @@ struct PDFViewRepresentable: UIViewRepresentable {
             super.init()
         }
 
-        deinit {
+        /// Called from `dismantleUIView` (main actor) — a nonisolated deinit may not touch these.
+        func detach() {
             for o in observers { NotificationCenter.default.removeObserver(o) }
+            observers.removeAll()
             offsetObservation?.invalidate()
+            offsetObservation = nil
+            overlay.removeFromSuperview()
         }
 
         func attach(to v: PDFView) {
