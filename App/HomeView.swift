@@ -27,8 +27,10 @@ struct HomeView: View {
     var body: some View {
         Group {
             if let shelf = app.homeShelf {
-                ShelfLibrary(shelf: shelf)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                Group {
+                    if shelf == .markup { MarkupLibrary() } else { ShelfLibrary(shelf: shelf) }
+                }
+                .transition(.move(edge: .trailing).combined(with: .opacity))
             } else {
                 HomeOverview()
                     .transition(.move(edge: .leading).combined(with: .opacity))
@@ -239,10 +241,14 @@ struct ShelfLibrary: View {
     }
 }
 
-struct DocTile: View {
+struct DocTile<Extra: View>: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
     var doc: Document
+    /// Show the library folder under the name (Recents / Favorites / search results).
+    var showFolder = false
+    /// Extra context-menu items (library actions).
+    @ViewBuilder var extra: () -> Extra
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -258,15 +264,23 @@ struct DocTile: View {
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line, lineWidth: 1))
             .shadow(color: .black.opacity(0.14), radius: 2, y: 1)
             VStack(alignment: .leading, spacing: 2) {
-                Text(doc.name).font(fnt(13.5, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+                HStack(spacing: 4) {
+                    if doc.isFavorite { Image(systemName: "star.fill").font(fnt(10)).foregroundStyle(Color(hex: "#FF9500")) }
+                    Text(doc.name).font(fnt(13.5, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+                }
                 Text(Formatting.tileMeta(pages: doc.pages.count, modified: doc.modified)).font(fnt(11.5)).foregroundStyle(theme.ink4)
+                if showFolder {
+                    Text("Redline" + (doc.folderPath.isEmpty ? "" : " › " + doc.folderPath.replacingOccurrences(of: "/", with: " › ")))
+                        .font(fnt(11)).foregroundStyle(theme.ink4).lineLimit(1)
+                }
             }
         }
         .contentShape(Rectangle())
         .onTapGesture { app.openDocument(doc.id) }
         .contextMenu {
-            Button("Open") { app.openDocument(doc.id) }
-            Button("Delete", role: .destructive) { app.pendingDelete = doc.id }
+            Button("Open", systemImage: "arrow.up.right.square") { app.openDocument(doc.id) }
+            extra()
+            Button("Delete", systemImage: "trash", role: .destructive) { app.pendingDelete = doc.id }
         }
     }
 
@@ -285,12 +299,8 @@ struct DocTile: View {
         case .markup:
             ZStack(alignment: .bottomLeading) {
                 Color.white
-                if let f = doc.pdfFile, let img = app.pdf.thumbnail(file: f, index: doc.pages.first?.pdfPageIndex ?? 0) {
-                    Image(uiImage: img).resizable().scaledToFill()
-                } else if let first = doc.pages.first {
-                    TemplateSwatch(template: first.template, paper: .white)
-                }
-                badge("bubble.left", Formatting.plural(doc.comments.count, "comment"))
+                DocumentThumbnail(doc: doc)
+                badge("doc.text", Formatting.plural(doc.pages.count, "page"))
                 Text("PDF").font(fnt(9, .heavy)).tracking(0.5).foregroundStyle(.white).padding(.horizontal, 5).padding(.vertical, 2)
                     .background(RoundedRectangle(cornerRadius: 3).fill(Color(hex: "#e8483f")))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(8)
@@ -323,6 +333,14 @@ struct DocTile: View {
             .foregroundStyle(Color(hex: "#6d6d72")).padding(.horizontal, 6).padding(.vertical, 2)
             .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.9)))
             .padding(8)
+    }
+}
+
+extension DocTile where Extra == EmptyView {
+    init(doc: Document, showFolder: Bool = false) {
+        self.doc = doc
+        self.showFolder = showFolder
+        self.extra = { EmptyView() }
     }
 }
 
@@ -359,28 +377,56 @@ struct NewDocumentSheet: View {
                         }
                     }
                     if draft.pdfFile == nil {
-                        VStack(alignment: .leading, spacing: 8) {
-                            SectionLabel(text: "Paper")
-                            HStack(spacing: 10) {
-                                ForEach(PageTemplate.allCases, id: \.self) { t in
-                                    let on = draft.template == t
-                                    VStack(spacing: 6) {
-                                        TemplateSwatch(template: t, paper: .white)
-                                            .aspectRatio(draft.landscape ? 1.29 : 0.78, contentMode: .fit)
-                                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(on ? theme.accent : theme.line, lineWidth: 1.5))
-                                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.accent.opacity(on ? 0.25 : 0), lineWidth: 6).padding(-3))
-                                        Text(t.label).font(fnt(12, .semibold)).foregroundStyle(on ? theme.accent : theme.ink2)
+                        HStack(alignment: .top, spacing: 22) {
+                            // Live model of the page: paper, colour and orientation.
+                            VStack(spacing: 8) {
+                                TemplateSwatch(template: draft.template, paper: draft.paper)
+                                    .aspectRatio(draft.landscape ? 1.294 : 0.773, contentMode: .fit)
+                                    .frame(height: draft.landscape ? 170 : 220)
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
+                                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.line2, lineWidth: 1))
+                                    .shadow(color: .black.opacity(0.18), radius: 10, y: 6)
+                                    .animation(.easeInOut(duration: 0.2), value: draft.landscape)
+                                Text("US Letter · \(draft.landscape ? "Landscape" : "Portrait")").font(fnt(11.5, .semibold)).foregroundStyle(theme.ink4)
+                            }
+                            .frame(maxWidth: .infinity)
+                            VStack(alignment: .leading, spacing: 14) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    SectionLabel(text: "Paper")
+                                    HStack(spacing: 8) {
+                                        ForEach(PageTemplate.allCases, id: \.self) { t in
+                                            let on = draft.template == t
+                                            VStack(spacing: 5) {
+                                                TemplateSwatch(template: t, paper: draft.paper)
+                                                    .frame(width: 44, height: 56)
+                                                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                                                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(on ? theme.accent : theme.line, lineWidth: on ? 2 : 1))
+                                                Text(t.label).font(fnt(11, .semibold)).foregroundStyle(on ? theme.accent : theme.ink2)
+                                            }
+                                            .contentShape(Rectangle())
+                                            .onTapGesture { app.newDraft?.template = t }
+                                        }
                                     }
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { app.newDraft?.template = t }
+                                }
+                                VStack(alignment: .leading, spacing: 8) {
+                                    SectionLabel(text: "Color")
+                                    HStack(spacing: 10) {
+                                        ForEach(Paper.pagePresets, id: \.self) { p in
+                                            Circle().fill(Color(hex: p.hex)).frame(width: 34, height: 34)
+                                                .overlay(Circle().stroke(theme.line2, lineWidth: 1))
+                                                .overlay(Circle().stroke(theme.accent, lineWidth: draft.paper == p ? 2.5 : 0).padding(-4))
+                                                .onTapGesture { app.newDraft?.paper = p }
+                                                .accessibilityLabel(p.label)
+                                        }
+                                    }
+                                }
+                                VStack(alignment: .leading, spacing: 8) {
+                                    SectionLabel(text: "Orientation")
+                                    SegmentControl(options: [SegmentOption(value: false, label: "Portrait"), SegmentOption(value: true, label: "Landscape")],
+                                                   selection: Binding(get: { app.newDraft?.landscape ?? false }, set: { app.newDraft?.landscape = $0 }), fontSize: 12.5, vPad: 6, fill: true)
                                 }
                             }
-                        }
-                        VStack(alignment: .leading, spacing: 8) {
-                            SectionLabel(text: "Orientation")
-                            SegmentControl(options: [SegmentOption(value: false, label: "Portrait"), SegmentOption(value: true, label: "Landscape")],
-                                           selection: Binding(get: { app.newDraft?.landscape ?? false }, set: { app.newDraft?.landscape = $0 }), fontSize: 12.5, vPad: 6, fill: true)
+                            .frame(maxWidth: .infinity)
                         }
                     }
                 } else {
@@ -426,6 +472,35 @@ struct NewDocumentSheet: View {
             .frame(maxWidth: Metrics.modalWidth)
             .background(theme.popSolid)
             .presentationDetents([.medium, .large])
+        }
+    }
+}
+
+/// First page of a markup rendered with all its marks (same renderer as the canvas).
+struct DocumentThumbnail: View {
+    @Environment(AppModel.self) private var app
+    var doc: Document
+    var body: some View {
+        GeometryReader { g in
+            if doc.type == .markup, let f = doc.pdfFile {
+                let _ = app.pdf.revision
+                if let img = app.pdf.thumbnail(file: f, index: 0) {
+                    Image(uiImage: img).resizable().scaledToFill().frame(width: g.size.width, height: g.size.height).clipped()
+                } else {
+                    Color(hex: "#f4f4f6")
+                }
+            } else if let pg = doc.pages.first {
+                let c = doc.canvasSize
+                let z = g.size.width / c.w
+                let _ = app.pdf.revision
+                let img = doc.pdfFile.flatMap { app.pdf.thumbnail(file: $0, index: pg.pdfPageIndex ?? 0) }
+                let input = PageRenderInput(page: pg, docType: doc.type, canvas: c, transform: .identity, zoom: z, activeLayer: nil, live: nil,
+                                            selection: [], eraseHits: [], highlightComment: nil, selectedField: nil, showFieldTags: false,
+                                            lasso: nil, marquee: nil, blueprint: app.settings.blueprint, pdfImage: img,
+                                            pdfLoading: doc.pdfFile != nil && img == nil, drawingPaper: doc.paper,
+                                            accentHex: "#007AFF", showSelection: false)
+                PageCanvas(input: input, size: CGSize(width: c.w * z, height: c.h * z), async: true)
+            }
         }
     }
 }

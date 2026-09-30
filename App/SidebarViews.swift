@@ -12,7 +12,7 @@ struct SidebarView: View {
                            fontSize: 10.5, vPad: 4, hPad: 4, radius: 8, fill: true)
                 .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
             switch editor.sideTab {
-            case .comments: CommentsPanel(editor: editor)
+            case .comments: if editor.isPDF { PDFCommentsPanel(editor: editor) } else { CommentsPanel(editor: editor) }
             case .bookmarks: BookmarksPanel(editor: editor)
             case .outline: OutlinePanel(editor: editor)
             case .forms: FormsPanel(editor: editor)
@@ -329,7 +329,7 @@ struct PageThumbnail: View {
         let f = editor.frameSize(page: pageIndex)
         let z = width / f.width
         let input = editor.renderInput(page: pageIndex, zoom: z, interactive: false)
-        PageCanvas(input: input, size: CGSize(width: f.width * z, height: f.height * z))
+        PageCanvas(input: input, size: CGSize(width: f.width * z, height: f.height * z), async: true)
             .clipShape(RoundedRectangle(cornerRadius: 3))
             .shadow(color: .black.opacity(0.2), radius: 1.5, y: 1)
     }

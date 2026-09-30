@@ -23,6 +23,8 @@ struct NewDocumentDraft {
     var pdfPages: Int? = nil
     var sheetSize: Size? = nil
     var landscape: Bool = false
+    /// Library folder the new document lands in.
+    var folder: String = ""
 
     init(type: DocumentType) {
         self.type = type
@@ -48,6 +50,8 @@ final class AppModel {
     var homeShelf: DocumentType? = nil
     var homeQuery = ""
     var homeSort: HomeSort = .recent
+    /// Markups library location.
+    var library: LibraryLocation = .folder("")
 
 
     var newDraft: NewDocumentDraft? = nil
@@ -89,6 +93,7 @@ final class AppModel {
 
     func openDocument(_ id: ID) {
         guard store.document(id) != nil else { return }
+        store.noteOpened(id)
         editor = WorkspaceModel(app: self, docID: id)
         screen = .workspace(id)
     }
@@ -113,11 +118,15 @@ final class AppModel {
                                        pageCount: d.pdfPages ?? 3, pdfFile: d.pdfFile)
         var created = doc
         created.sheetSize = d.sheetSize
+        created.folder = d.folder
         if d.type == .markup && d.pdfFile == nil {
-            var p = Page.markup(label: "Page 1")
-            p.template = d.template
-            created.pages = [p]
-            created.sheetSize = d.landscape ? Metrics.letterLandscape : Metrics.letterPortrait
+            // A new markup is a real PDF file on the chosen paper.
+            let size = d.landscape ? CGSize(width: 792, height: 612) : CGSize(width: 612, height: 792)
+            if let file = AppModel.createBlankPDF(name: created.name, size: size, template: d.template, paper: d.paper) {
+                created.pdfFile = file
+                created.pages = [Page.markup(label: "Page 1", artwork: "pdf", pdfPageIndex: 0)]
+                created.sheetSize = Size(1000, (1000 * size.height / size.width).rounded())
+            }
         }
         store.patch(doc.id) { $0 = created }
         newDraft = nil
@@ -132,6 +141,19 @@ final class AppModel {
         }
         store.deleteDocument(id)
         scheduleSave()
+    }
+
+    /// Imports several PDFs (Browse Files…) into a library folder without opening them.
+    func importPDFs(_ urls: [URL], into folder: String) {
+        var n = 0
+        for url in urls {
+            guard let r = importPDF(from: url) else { continue }
+            let doc = store.createDocument(type: .markup, name: url.deletingPathExtension().lastPathComponent, pageCount: r.pages, pdfFile: r.file)
+            store.patch(doc.id) { $0.sheetSize = r.sheetSize; $0.folder = folder }
+            n += 1
+        }
+        scheduleSave()
+        flash(n == 0 ? "Nothing imported" : "Imported " + Formatting.plural(n, "PDF"))
     }
 
     /// "Open in Redline" from Files / Share sheet: import the PDF as a new markup and open it.
@@ -238,5 +260,49 @@ final class AppModel {
 
     func pdfImage(file: String, pageIndex: Int, canvas: Size) -> UIImage? {
         pdf.image(file: file, index: pageIndex, canvas: canvas)
+    }
+
+    // MARK: blank PDFs
+
+    /// One-page PDF data on the given paper (template drawn in light ink).
+    static func blankPDFData(size: CGSize, template: PageTemplate, paper: Paper) -> Data {
+        UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+            c.beginPage()
+            let cg = c.cgContext
+            cg.setFillColor(UIColor(hex: paper.hex).cgColor)
+            cg.fill(CGRect(origin: .zero, size: size))
+            let ink = (paper.isDark ? UIColor.white : UIColor.black).withAlphaComponent(template.alpha)
+            let s = template.spacing * size.width / 1000 * 1.6
+            guard template != .blank, s > 0 else { return }
+            cg.setStrokeColor(ink.cgColor); cg.setFillColor(ink.cgColor); cg.setLineWidth(0.6)
+            switch template {
+            case .dot:
+                var y = s
+                while y < size.height { var x = s; while x < size.width { cg.fillEllipse(in: CGRect(x: x - 0.8, y: y - 0.8, width: 1.6, height: 1.6)); x += s }; y += s }
+            case .grid:
+                var x = s; while x < size.width { cg.move(to: CGPoint(x: x, y: 0)); cg.addLine(to: CGPoint(x: x, y: size.height)); x += s }
+                var y = s; while y < size.height { cg.move(to: CGPoint(x: 0, y: y)); cg.addLine(to: CGPoint(x: size.width, y: y)); y += s }
+                cg.strokePath()
+            case .lined:
+                var y = s; while y < size.height { cg.move(to: CGPoint(x: 0, y: y)); cg.addLine(to: CGPoint(x: size.width, y: y)); y += s }
+                cg.strokePath()
+            case .blank: break
+            }
+        }
+    }
+
+    /// Writes a new blank PDF into Documents/PDFs and returns its file name.
+    static func createBlankPDF(name: String, size: CGSize, template: PageTemplate, paper: Paper) -> String? {
+        let base = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".pdf", with: "")
+        var file = base + ".pdf"
+        var n = 2
+        while FileManager.default.fileExists(atPath: PDFService.directory.appendingPathComponent(file).path) { file = "\(base) \(n).pdf"; n += 1 }
+        let data = blankPDFData(size: size, template: template, paper: paper)
+        do { try data.write(to: PDFService.directory.appendingPathComponent(file), options: .atomic); return file } catch { return nil }
+    }
+
+    /// A single blank page to insert into an existing PDF.
+    static func blankPage(size: CGSize, template: PageTemplate, paper: Paper) -> PDFPage? {
+        PDFDocument(data: blankPDFData(size: size, template: template, paper: paper))?.page(at: 0)
     }
 }

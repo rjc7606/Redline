@@ -45,6 +45,10 @@ func fixtureData() -> RedlineData {
 
 // MARK: Styles & palettes
 
+extension ToolStyles {
+    static func presets(for tool: Tool) -> [StylePreset] { ToolStyles().presets(for: tool) }
+}
+
 @Test func stylePresetDefaults() {
     var st = ToolStyles()
     #expect(st.presets(for: .pen).count == 4)
@@ -60,7 +64,7 @@ func fixtureData() -> RedlineData {
     #expect(st.presets(for: .pen)[0].width == 2.4)
     st.reset(.pen)
     #expect(st.current(for: .pen).width == 2.4)
-    #expect(ToolStyles.widthRange(for: .fineliner) == 0.5...3)
+    #expect(ToolStyles.widthRange(for: .fineliner) == 0.5...6)
     #expect(ToolStyles.quickPalette.count == 12)
     #expect(Spectrum.grid.count == 120)
 }
@@ -129,6 +133,40 @@ func fixtureData() -> RedlineData {
     #expect(StrokeGeometry.render(Stroke(tool: .textbox, color: "#000", points: [StrokePoint(1, 1)], text: "hi")) == nil)
     let b = StrokeGeometry.bounds(of: check)
     #expect(b.contains(Point(50, 50)))
+}
+
+@Test func inkFill() {
+    let sq = Stroke(tool: .pen, color: "#000", points: [StrokePoint(0, 0), StrokePoint(100, 0), StrokePoint(100, 100), StrokePoint(0, 100), StrokePoint(3, 4)], width: 2)
+    #expect(Hit.isClosedInk(sq))
+    let open = Stroke(tool: .pen, color: "#000", points: [StrokePoint(0, 0), StrokePoint(100, 0), StrokePoint(100, 100), StrokePoint(0, 100)], width: 2)
+    #expect(!Hit.isClosedInk(open))
+    var filled = sq; filled.fill = "#ff0"; filled.fillPattern = .solid; filled.fillOpacity = 0.5
+    let r = StrokeGeometry.render(filled)!
+    #expect(r.fillColor == "#ff0" && r.strokeColor == "#000" && r.path.ops.last == .close)
+    #expect(ToolStyles.presets(for: .eraser).map(\.width) == ToolStyles.eraserSizes)
+    #expect(ToolStyles.widthRange(for: .pen).upperBound == 12)
+    var tp = StylePreset(color: "#000", width: 6)
+    tp.setColor("#123456", for: .font); tp.font = "Georgia"; tp.fontWeight = .bold
+    #expect(tp.color == "#123456" && tp.color(for: .font) == "#123456" && TextFonts.label(for: "Georgia") == "Georgia" && TextFonts.label(for: nil) == "System")
+}
+
+@Test func leaderGeometry() {
+    let anchor = Point(300, 100)
+    let elbow = StrokeGeometry.defaultElbow(tip: Point(100, 200), anchor: anchor, text: "Note", width: 6)
+    let s = Stroke(tool: .callout, color: "#f00", points: [StrokePoint(100, 200), StrokePoint(elbow.x, elbow.y), StrokePoint(anchor.x, anchor.y)], width: 6, text: "Note")
+    let L = StrokeGeometry.leader(s)!
+    #expect(L.box.contains(Point(310, 92)))
+    #expect(abs(L.attach.x - L.box.minX) < 0.01)            // shelf meets the left side (tip is to the left)
+    #expect(abs(L.attach.y - L.box.center.y) < 0.01)
+    var up = s; up.points[1] = StrokePoint(320, 40)          // elbow moved above the box
+    let L2 = StrokeGeometry.leader(up)!
+    #expect(abs(L2.attach.y - L2.box.minY) < 0.01 && abs(L2.attach.x - 320) < 0.01)
+    #expect(StrokeGeometry.leaderPath(L, width: 2).ops.count >= 6)
+    #expect(Hit.strokeTouches(s, point: Point(100, 200), radius: 4))
+    #expect(Hit.strokeTouches(s, point: Point(310, 92), radius: 2))
+    #expect(!Hit.strokeTouches(s, point: Point(600, 600), radius: 4))
+    #expect(StrokeGeometry.render(s) == nil)
+    #expect(StrokeGeometry.bounds(of: s).contains(Point(100, 200)))
 }
 
 @Test func hitTesting() {
@@ -300,6 +338,32 @@ func fixtureData() -> RedlineData {
     #expect(store.count(on: .markup) == 0)
 }
 
+@Test func libraryFolders() {
+    var store = RedlineStore(data: fixtureData())
+    let doc = store.documents(on: .markup)[0]
+    let projects = store.createFolder(named: "Projects", in: "")
+    let meridian = store.createFolder(named: "Meridian", in: projects)
+    #expect(meridian == "Projects/Meridian")
+    #expect(store.createFolder(named: "Projects", in: "") == "Projects 2")
+    #expect(store.subfolders(of: "").sorted() == ["Projects", "Projects 2"])
+    #expect(store.subfolders(of: "Projects") == ["Projects/Meridian"])
+    store.move(doc.id, toFolder: meridian)
+    #expect(store.documents(on: .markup, in: meridian).count == 1)
+    #expect(store.documents(on: .markup, in: "").isEmpty)
+    store.renameFolder("Projects", to: "Jobs")
+    #expect(store.document(doc.id)?.folderPath == "Jobs/Meridian")
+    #expect(store.allFolders.contains("Jobs/Meridian") && !store.allFolders.contains("Projects"))
+    store.deleteFolder("Jobs")
+    #expect(store.document(doc.id)?.folderPath == "Meridian")
+    #expect(store.allFolders == ["Meridian", "Projects 2"])
+    store.setFavorite(doc.id, true)
+    #expect(store.favorites(on: .markup).map(\.id) == [doc.id])
+    #expect(store.recents(on: .markup).isEmpty)
+    store.noteOpened(doc.id)
+    #expect(store.recents(on: .markup).first?.id == doc.id)
+    #expect(RedlineStore.name(of: "a/b/c") == "c" && RedlineStore.parent(of: "a/b/c") == "a/b" && RedlineStore.parent(of: "a") == "")
+}
+
 @Test func persistenceRoundTrip() throws {
     let data = fixtureData()
     let bytes = try data.encode()
@@ -341,7 +405,7 @@ func fixtureData() -> RedlineData {
     let zs = Metrics.fitZoom(canvas: Metrics.notesCanvas, available: Size(1000, 700), spread: true)
     #expect(zs < 0.9)
     #expect(ToolCatalog.markupTabs.map(\.id) == ["draw", "annotate", "edit", "forms"])
-    #expect(Tool.pen.hasPresets && !Tool.eraser.hasPresets)
+    #expect(Tool.pen.hasPresets && Tool.eraser.hasPresets && !Tool.select.hasPresets)
     #expect(ToolCatalog.tool(for: .list) == .flist)
     #expect(ToolCatalog.pickHint(for: .distance, rulerLocked: false) == "Measure tools are preview-only")
 }

@@ -5,7 +5,9 @@ annotation engine, one toolbar behaviour, one Style Popover and one set of colou
 
 - **Markups** — PDF annotation: Favorites / Draw / Annotate / Edit / Forms tabs, comments with
   authors, status and replies, form fields, organize pages. Import a PDF from Files (or open one
-  with "Open in Redline"), or create a new PDF on blank, dot, grid or lined paper.
+  with "Open in Redline"), or create a new PDF on blank, dot, grid or lined paper in four page colours.
+  The Markups library has Recents, Favorites, a folder tree (On My iPad › Redline) and a Browse Files…
+  entry that opens the system picker for iCloud Drive, OneDrive, Dropbox and other Files providers.
 - **Drawings** — layered plan sets: a Base layer plus trace layers with a white "veil", lock/hide,
   flatten down / flatten all.
 - **Notes** — paged notebooks: paper colours, templates, tags, single page or facing spread, and a
@@ -45,15 +47,29 @@ swift test
   directory. Imported PDFs are copied into `Documents/PDFs` and "Save to Files" exports go to
   `Documents/Exports`, both visible in the Files app under On My iPad › Redline. PDFs can also be
   opened from Files or the share sheet ("Open in Redline").
+- Markups are real PDFs edited through PDFKit: every tool creates a standard PDF annotation (Ink, Highlight /
+  Underline / StrikeOut / Squiggly with text quads, Square, Circle, Line, FreeText, Text notes, Widgets), with author,
+  date, contents, replies (`IRT`) and review state, so the file opens with its marks in any PDF app. Existing
+  annotations keep their appearance until edited. New PDFs are generated on the chosen paper.
 - On PDF pages the highlighter, underline, strikethrough and squiggly tools snap to the page's text
   lines (PDFKit selection); pages without text fall back to a freehand band.
-- The Pen responds to Apple Pencil pressure; Fineliner, Felt tip and Marker draw at a constant width.
+- The Pen responds to Apple Pencil pressure in Drawings and Notes; Markups use Fineliner, Felt tip and Marker
+  (constant-width PDF Ink annotations).
 - With no tool selected a finger moves the page (locked to the first direction it moves; two fingers pan freely
   and pinch to zoom). After a pen is picked, the first touch decides: a finger first lets fingers ink; the Pencil
-  first makes fingers pan. Every other tool works with a finger. Settings › Finger drawing overrides this
+  first makes fingers pan. Every other tool works with a finger; with a tap tool (stamp, note, text, field,
+  fill) a finger that moves pans instead, and the tap only fires on a clean lift. Settings › Finger drawing overrides this
   (Auto / Always / Never). Only fingers move or rotate the ruler; Pencil touches over it draw.
   The Select tool (pinned beside Organize Pages) selects with a tap, a diagonal box drag, or a lasso.
-- The eraser cuts only the touched part out of ink strokes. Double-tapping an Apple Pencil switches
+- Text boxes and callouts have a Font tab (family, weight, size, colour); placing a sticky note opens its comment for typing.
+- Tapping an annotation (or its comment in the sidebar) opens a popup beside it with the comment, status, replies
+  and a Properties editor that restyles the annotation itself. Annotations with comment text show a small badge.
+- Markup and drawing pages stack in a native vertical scroll: rubber-band bounce back to a 24 pt margin on all
+  sides, direction-locked finger scrolling, finger pinch-zoom (re-rendered sharp when the pinch ends); the Pencil
+  never scrolls. Zoomed-out pages are centred with the larger margins that leaves.
+- PDF pages render on a background queue; a neutral placeholder shows until each page image is ready.
+- The eraser cuts only the touched part out of ink strokes; its four presets are sizes.
+- Bucket fill works on shape-tool shapes and on pen strokes that close on themselves. Double-tapping an Apple Pencil switches
   to the eraser and back (it follows the system Pencil "Double Tap" setting).
 - Measure tools, edit text / insert image / link / crop, custom stamps and append/extract pages
   currently show a "coming soon" toast, matching the prototype's preview-only behaviour.

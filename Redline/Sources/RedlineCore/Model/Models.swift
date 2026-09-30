@@ -48,6 +48,8 @@ public enum Paper: String, Codable, Sendable, CaseIterable, Hashable {
     }
     public var isDark: Bool { self == .dark }
     public var label: String { rawValue.capitalized }
+    /// The four page colours offered when creating a PDF.
+    public static let pagePresets: [Paper] = [.white, .cream, .grey, .blue]
 }
 
 public enum PageTemplate: String, Codable, Sendable, CaseIterable, Hashable {
@@ -122,6 +124,20 @@ public enum ValidationRule: String, Codable, Sendable, CaseIterable, Hashable {
 
 public enum LayerKind: String, Codable, Sendable, Hashable { case base, trace }
 
+public enum TextWeight: String, Codable, Sendable, CaseIterable, Hashable {
+    case regular, medium, semibold, bold
+    public var label: String { rawValue.capitalized }
+}
+
+/// Font families offered for text boxes and callouts (nil name = system font).
+public enum TextFonts {
+    public static let options: [(label: String, name: String?)] = [
+        ("System", nil), ("Helvetica Neue", "Helvetica Neue"), ("Avenir Next", "Avenir Next"), ("Georgia", "Georgia"),
+        ("Times New Roman", "Times New Roman"), ("Courier New", "Courier New"), ("Marker Felt", "Marker Felt"), ("Chalkboard", "Chalkboard SE")
+    ]
+    public static func label(for name: String?) -> String { options.first { $0.name == name }?.label ?? (name ?? "System") }
+}
+
 // MARK: - Structs
 
 public struct StrokePoint: Codable, Sendable, Equatable, Hashable {
@@ -158,18 +174,23 @@ public struct Stroke: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var scale: Double
     /// Text-line rectangles (page coordinates) for markup snapped to PDF text: highlighter, underline, strike, squiggly.
     public var rects: [Rect]?
+    /// Font family / weight for text boxes and callouts (nil = system, semibold).
+    public var font: String?
+    public var fontWeight: TextWeight?
 
     public init(id: ID = IDGen.make(), tool: Tool, color: String, points: [StrokePoint], width: Double? = nil,
                 weight: WeightMode = .constant, opacity: Double? = nil, lineStyle: LineStyle? = nil,
                 fill: String? = nil, fillPattern: FillPattern? = nil, fillOpacity: Double? = nil, text: String? = nil,
                 background: String? = nil, backgroundOpacity: Double? = nil, borderColor: String? = nil,
-                borderOpacity: Double? = nil, borderWidth: Double? = nil, commentID: ID? = nil, scale: Double = 1, rects: [Rect]? = nil) {
+                borderOpacity: Double? = nil, borderWidth: Double? = nil, commentID: ID? = nil, scale: Double = 1, rects: [Rect]? = nil,
+                font: String? = nil, fontWeight: TextWeight? = nil) {
         self.id = id; self.tool = tool; self.color = color; self.points = points; self.width = width
         self.weight = weight; self.opacity = opacity; self.lineStyle = lineStyle; self.fill = fill
         self.fillPattern = fillPattern; self.fillOpacity = fillOpacity; self.text = text
         self.background = background; self.backgroundOpacity = backgroundOpacity; self.borderColor = borderColor
         self.borderOpacity = borderOpacity; self.borderWidth = borderWidth; self.commentID = commentID; self.scale = scale
         self.rects = rects
+        self.font = font; self.fontWeight = fontWeight
     }
 
     /// Whether this stroke is anchored to PDF text lines.
@@ -321,6 +342,13 @@ public struct Document: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var bookmarks: [ID]
     /// Logical page size override (imported PDFs keep their own aspect ratio).
     public var sheetSize: Size?
+    /// Library folder path ("" = root, "Projects/Meridian" nested). Optional so older data decodes.
+    public var folder: String?
+    public var favorite: Bool?
+    public var lastOpened: Date?
+
+    public var folderPath: String { folder ?? "" }
+    public var isFavorite: Bool { favorite ?? false }
 
     public init(id: ID = IDGen.make(), type: DocumentType, name: String, created: Date = Date(), modified: Date? = nil,
                 pages: [Page], comments: [Comment] = [], paper: Paper = .white, pdfFile: String? = nil, bookmarks: [ID] = [],

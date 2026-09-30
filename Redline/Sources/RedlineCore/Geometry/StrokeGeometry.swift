@@ -66,6 +66,13 @@ public enum StrokeGeometry {
         }
         switch s.tool.kind {
         case .ink:
+            // A pen-drawn shape that was bucket-filled: closed centreline with fill and outline.
+            if let fp = s.fillPattern, fp != FillPattern.none {
+                path.smoothPolyline(pts)
+                path.close()
+                return StrokeRender(path: path, strokeColor: s.color, strokeWidth: max(0.5, w), strokeOpacity: op, fillColor: s.fill ?? s.color,
+                                    fillOpacity: s.fillOpacity ?? 0.5, fillPattern: fp, dash: dash, roundCap: true, multiply: false)
+            }
             if s.weight == .pressure, s.points.count > 1 {
                 let outline = pressureOutline(s.points, width: w * 1.6)
                 path.polyline(outline, closed: true)
@@ -103,8 +110,8 @@ public enum StrokeGeometry {
             guard let a = pts.first else { return nil }
             let b = pts.last ?? a
             let box = Rect.from(a, b)
-            let fp = s.fillPattern ?? .none
-            let fillC: String? = fp == .none ? nil : (s.fill ?? s.color)
+            let fp = s.fillPattern ?? FillPattern.none
+            let fillC: String? = fp == FillPattern.none ? nil : (s.fill ?? s.color)
             let fo = s.fillOpacity ?? 0.5
             switch s.tool {
             case .rect: path.rect(box)
@@ -122,14 +129,8 @@ public enum StrokeGeometry {
             case .polygon: path.polyline(pts, closed: true)
             case .cloud: path = cloud(box, radius: max(8, min(box.w, box.h) / 8))
             case .callout:
-                // Box at the drag end, pointer from the drag start.
-                let bw = 150.0, bh = 48.0
-                let box2 = Rect(x: b.x - bw / 2, y: b.y - bh / 2, w: bw, h: bh)
-                path.rect(box2)
-                let edge = Point(min(box2.maxX, max(box2.minX, a.x)), a.y < box2.minY ? box2.minY : (a.y > box2.maxY ? box2.maxY : a.y))
-                path.move(to: edge); path.line(to: a)
-                return StrokeRender(path: path, strokeColor: s.color, strokeWidth: max(1.5, w), strokeOpacity: op, fillColor: fillC,
-                                    fillOpacity: fo, fillPattern: fp, dash: dash, roundCap: true, multiply: false)
+                // Leader: drawn by the renderer (text box + leader line); see `leader(_:)`.
+                return nil
             default: path.polyline(pts)
             }
             let closed = s.tool.isShape
@@ -185,6 +186,58 @@ public enum StrokeGeometry {
                             fillOpacity: 0, fillPattern: .none, dash: dash, roundCap: true, multiply: false)
     }
 
+    // MARK: Text boxes & leaders
+
+    /// Text box rectangle for a text anchor (top-left of the text) — the same estimate the renderer uses.
+    public static func textRect(anchor a: Point, text: String, width: Double?) -> Rect {
+        let fs = 10 + (width ?? 6)
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let longest = lines.map(\.count).max() ?? 0
+        return Rect(x: a.x - 6, y: a.y - fs - 3, w: Double(max(1, longest)) * fs * 0.58 + 12, h: fs * 1.45 * Double(max(1, lines.count)) + 6)
+    }
+
+    public struct Leader: Sendable, Equatable {
+        public var tip: Point
+        public var elbow: Point
+        /// Where the shelf meets the text box.
+        public var attach: Point
+        public var box: Rect
+        public var anchor: Point
+        public init(tip: Point, elbow: Point, attach: Point, box: Rect, anchor: Point) {
+            self.tip = tip; self.elbow = elbow; self.attach = attach; self.box = box; self.anchor = anchor
+        }
+    }
+
+    /// Leader geometry: points[0] = arrow tip, points[1] = elbow, points[2] = text anchor.
+    /// The shelf leaves the box side that faces the elbow, sliding along it.
+    public static func leader(_ s: Stroke) -> Leader? {
+        guard s.tool == .callout, s.points.count >= 3 else { return nil }
+        let tip = s.points[0].point, elbow = s.points[1].point, anchor = s.points[2].point
+        let box = textRect(anchor: anchor, text: s.text?.isEmpty == false ? s.text! : "Text", width: s.width)
+        let attach: Point
+        if elbow.x < box.minX { attach = Point(box.minX, min(box.maxY, max(box.minY, elbow.y))) }
+        else if elbow.x > box.maxX { attach = Point(box.maxX, min(box.maxY, max(box.minY, elbow.y))) }
+        else if elbow.y < box.minY { attach = Point(min(box.maxX, max(box.minX, elbow.x)), box.minY) }
+        else if elbow.y > box.maxY { attach = Point(min(box.maxX, max(box.minX, elbow.x)), box.maxY) }
+        else { attach = Point(box.minX, box.center.y) }
+        return Leader(tip: tip, elbow: elbow, attach: attach, box: box, anchor: anchor)
+    }
+
+    /// Default elbow for a new leader: a horizontal shelf on the box side facing the tip.
+    public static func defaultElbow(tip: Point, anchor: Point, text: String, width: Double?) -> Point {
+        let box = textRect(anchor: anchor, text: text.isEmpty ? "Text" : text, width: width)
+        let left = tip.x < box.center.x
+        return Point(left ? box.minX - 28 : box.maxX + 28, box.center.y)
+    }
+
+    /// Leader line path (attach → elbow → tip) with an arrowhead at the tip.
+    public static func leaderPath(_ L: Leader, width w: Double) -> PathData {
+        var path = PathData()
+        path.move(to: L.attach); path.line(to: L.elbow); path.line(to: L.tip)
+        arrowHead(&path, from: L.elbow, to: L.tip, size: max(12, w * 4))
+        return path
+    }
+
     static func arrowHead(_ path: inout PathData, from a: Point, to b: Point, size: Double) {
         let ang = atan2(b.y - a.y, b.x - a.x)
         let spread = 0.45
@@ -238,6 +291,10 @@ public enum StrokeGeometry {
 
     /// Bounding rectangle used for hit-testing / selection rings.
     public static func bounds(of s: Stroke) -> Rect {
+        if let L = leader(s) {
+            let pts = [L.tip, L.elbow, Point(L.box.minX, L.box.minY), Point(L.box.maxX, L.box.maxY)]
+            return Rect.bounding(pts).insetBy(-6)
+        }
         if let r = render(s) { return r.path.bounds.insetBy(-max(4, r.strokeWidth / 2)) }
         let c = s.anchor
         switch s.tool.kind {
@@ -245,9 +302,7 @@ public enum StrokeGeometry {
             let sz = placedSize(for: s.tool)
             return Rect(x: c.x - sz.w * s.scale / 2, y: c.y - sz.h * s.scale / 2, w: sz.w * s.scale, h: sz.h * s.scale)
         case .text:
-            let fs = 10 + (s.width ?? 6)
-            let wdt = Double((s.text ?? "").count) * fs * 0.58 + 16
-            return Rect(x: c.x - 6, y: c.y - fs - 4, w: wdt, h: fs * 1.6)
+            return textRect(anchor: c, text: s.text ?? "", width: s.width)
         case .stampGallery, .stampPreset:
             let wdt = Double((s.text ?? "").count) * 11 * s.scale + 28 * s.scale
             return Rect(x: c.x - wdt / 2, y: c.y - 18 * s.scale, w: wdt, h: 36 * s.scale)

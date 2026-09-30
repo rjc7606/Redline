@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import PDFKit
 import RedlineCore
 
 enum SideTab: String, CaseIterable, Hashable {
@@ -33,6 +34,29 @@ struct CommentItem: Identifiable {
     var id: ID { comment.id }
 }
 
+/// An in-progress inline text edit (new text box, or editing an existing text box / leader).
+struct TextEdit: Equatable {
+    var page: Int
+    var anchor: Point
+    var existingID: ID?
+    var isLeader: Bool
+}
+
+/// Drag state for the PDFKit markup canvas (page space).
+enum MkDrag {
+    case draw
+    case marquee(start: CGPoint)
+    case move(start: CGPoint, snaps: [(PDFAnnotation, AnnotationSnapshot)])
+    case resize(center: CGPoint, d0: CGFloat, snaps: [(PDFAnnotation, AnnotationSnapshot)])
+    case handle(leader: PDFAnnotation, index: Int, snap: AnnotationSnapshot)
+    case erase
+    case rulerMove(start: CGPoint, base: CGPoint)
+    case rulerRotate(a0: CGFloat, r0: Double)
+    case rulerTap
+    case pan
+}
+enum MkDrawMode { case free, edge(offset: CGFloat, along0: CGFloat), lock }
+
 struct FlattenRequest: Equatable {
     /// nil → flatten all layers.
     var layerID: ID?
@@ -54,10 +78,18 @@ final class WorkspaceModel {
     let docID: ID
 
     var pageIndex = 0
+    /// PDFKit-backed state for Markups (unused for Drawings / Notes).
+    let mk = MarkupState()
+    var mkDrag: MkDrag? = nil
+    var mkDragMoved = false
+    var mkDrawMode: MkDrawMode = .free
+    var mkLassoMode = false
+    /// Page the scroll view should bring into view (set by navigation, cleared once done).
+    var scrollRequest: Int? = nil
     var tool: Tool
     var zoom: Double = Metrics.defaultZoom
     var pan: CGSize = .zero
-    var sidebarOpen = true
+    var sidebarOpen = false
     var sideTab: SideTab
     var markupTab: MarkupTab = .favorites(0)
 
@@ -96,6 +128,15 @@ final class WorkspaceModel {
     var textPrompt: Point? = nil
     var textPromptPage = 0
     var textDraft = ""
+    var textEdit: TextEdit? = nil
+    /// Comment popup beside the selected annotation, and its expanded Properties editor.
+    var annotationPopup = false
+    var annotationProps = false
+    /// Focus the popup's comment field when it opens (sticky note just placed).
+    var annotationFocusComment = false
+    private var annotationStyleSnapshot = false
+    private var pendingTextEditID: ID? = nil
+    private var handleDrag: (id: ID, index: Int)? = nil
     var textAlertVisible = false
     var layerRenameVisible = false
     var favRenameVisible = false
@@ -147,6 +188,7 @@ final class WorkspaceModel {
         case .journal: tool = .pen; sideTab = .pages
         }
         if d.type == .drawing { activeLayer = d.pages.first?.layers.last?.id }
+        if d.type == .markup { mkLoad() }
     }
 
     // MARK: - Document access
@@ -154,8 +196,8 @@ final class WorkspaceModel {
     var doc: Document { app.store.document(docID) ?? Document(type: .markup, name: "", pages: [.markup()]) }
     var type: DocumentType { doc.type }
     var canvas: Size { doc.canvasSize }
-    var page: Page { doc.pages[min(pageIndex, doc.pages.count - 1)] }
-    var pageCount: Int { doc.pages.count }
+    var page: Page { doc.pages[min(pageIndex, max(0, doc.pages.count - 1))] }
+    var pageCount: Int { isPDF ? mk.pageCount : doc.pages.count }
 
     var strokeContext: StrokeContext { StrokeContext(pageIndex: pageIndex, layerID: activeLayer) }
     func context(page i: Int) -> StrokeContext { StrokeContext(pageIndex: i, layerID: activeLayer) }
@@ -163,8 +205,8 @@ final class WorkspaceModel {
     /// Strokes the current tool acts on (active layer for drawings).
     var currentStrokes: [Stroke] { doc.strokes(at: strokeContext) }
 
-    var canUndo: Bool { app.store.canUndo(docID) }
-    var canRedo: Bool { app.store.canRedo(docID) }
+    var canUndo: Bool { isPDF ? !mk.undoStack.isEmpty : app.store.canUndo(docID) }
+    var canRedo: Bool { isPDF ? !mk.redoStack.isEmpty : app.store.canRedo(docID) }
 
     var sideTabs: [SideTab] {
         switch type { case .markup: [.comments, .bookmarks, .outline]; case .drawing: [.layers, .pages]; case .journal: [.pages, .tags] }
@@ -201,7 +243,7 @@ final class WorkspaceModel {
     var statusHint: String {
         switch type {
         case .markup:
-            return session != nil ? "Drawing session open — strokes group into one comment" : "Next ink stroke starts a new comment"
+            return mk.activeInk != nil ? "Pen strokes are joining one annotation" : "Next pen stroke starts a new annotation"
         case .drawing:
             return "Drawing on: " + (activeLayerObject?.name ?? "Base")
         case .journal:
@@ -241,10 +283,17 @@ final class WorkspaceModel {
         zoom = Metrics.fitZoom(canvas: canvas, available: Size(available.width, available.height), spread: type == .journal && spread)
         pan = .zero
     }
-    func zoomIn() { zoom = min(Metrics.maxZoom, ((zoom + 0.1) * 100).rounded() / 100) }
-    func zoomOut() { zoom = max(Metrics.minZoom, ((zoom - 0.1) * 100).rounded() / 100) }
+    func zoomIn() {
+        if isPDF, let v = mk.pdfView { v.scaleFactor = min(v.maxScaleFactor, v.scaleFactor * 1.2); return }
+        zoom = min(Metrics.maxZoom, ((zoom + 0.1) * 100).rounded() / 100)
+    }
+    func zoomOut() {
+        if isPDF, let v = mk.pdfView { v.scaleFactor = max(v.minScaleFactor, v.scaleFactor / 1.2); return }
+        zoom = max(Metrics.minZoom, ((zoom - 0.1) * 100).rounded() / 100)
+    }
     func pinch(by factor: Double) { zoom = min(Metrics.maxZoom, max(Metrics.minZoom, zoom * factor)) }
     func panBy(_ d: CGSize) {
+        if isPDF { mk.activeInk = nil; return }
         pan = CGSize(width: pan.width + d.width, height: pan.height + d.height)
         session = nil
     }
@@ -275,6 +324,7 @@ final class WorkspaceModel {
         previousTool = tool
         tool = t
         fingerInkAllowed = nil
+        if !keepSession { mk.activeInk = nil }
         if t != .eraser { toolBeforeEraser = nil }
         if !keepSession { session = nil }
         if t != .select && t != .lasso { selection = []; selectedField = nil }
@@ -299,17 +349,15 @@ final class WorkspaceModel {
         presetsTool = nil
     }
 
-    /// Tap on a preset: use it and close the dropdown (inside the editor it only switches presets).
-    func selectPreset(_ i: Int, closing: Bool = true) {
-        app.styles.select(i, for: styleTool)
-        if closing { presetsTool = nil; styleExpanded = false }
-    }
-
-    /// Long-press on a preset: open the full style editor for it.
-    func editPreset(_ i: Int) {
-        app.styles.select(i, for: styleTool)
-        styleTarget = .color
-        styleExpanded = true
+    /// Tap on a preset: use it (the row stays). Tapping the already-selected preset toggles the style editor.
+    func selectPreset(_ i: Int) {
+        let t = styleTool
+        if app.styles.selectedIndex(for: t) == i {
+            styleExpanded.toggle()
+            if styleExpanded { styleTarget = .color }
+        } else {
+            app.styles.select(i, for: t)
+        }
     }
 
     func updateStyle(_ body: (inout StylePreset) -> Void) {
@@ -319,18 +367,19 @@ final class WorkspaceModel {
     /// Pencil double-tap: eraser ⇄ the pen you were using (or previous tool, per the system setting).
     func pencilDoubleTap() {
         closePopovers()
+        let defaultPen: Tool = type == .markup ? .fineliner : .pen
         if UIPencilInteraction.preferredTapAction == .switchPrevious {
             let p = previousTool
             previousTool = tool
-            tool = p == .none ? .pen : p
+            tool = p == .none ? defaultPen : p
             app.flash(tool.label)
             return
         }
         if tool == .eraser {
-            let back = toolBeforeEraser ?? (previousTool == .eraser ? .pen : previousTool)
+            let back = toolBeforeEraser ?? (previousTool == .eraser ? defaultPen : previousTool)
             toolBeforeEraser = nil
             previousTool = .eraser
-            tool = back == .none ? .pen : back
+            tool = back == .none ? defaultPen : back
             fingerInkAllowed = nil
             app.flash(tool.label)
         } else {
@@ -343,6 +392,7 @@ final class WorkspaceModel {
     }
 
     func toggleRuler() {
+        if isPDF { mkToggleRuler(); return }
         ruler.on.toggle()
         if ruler.on {
             // Bring it onto the current page centre.
@@ -356,6 +406,7 @@ final class WorkspaceModel {
 
     func toggleRulerLock() {
         ruler.lock.toggle()
+        mk.renderTick += 1
         app.flash(ruler.lock ? "Locked — lines draw parallel or perpendicular to the ruler, anywhere on the page" : "Unlocked — draw along the ruler edge")
     }
 
@@ -396,12 +447,14 @@ final class WorkspaceModel {
 
     // MARK: - Undo / pages
 
-    func undo() { app.store.undo(docID); session = nil; selection = []; clampPage(); app.scheduleSave() }
-    func redo() { app.store.redo(docID); session = nil; selection = []; clampPage(); app.scheduleSave() }
+    func undo() { if isPDF { mkUndo(); return }; app.store.undo(docID); session = nil; selection = []; clampPage(); app.scheduleSave() }
+    func redo() { if isPDF { mkRedo(); return }; app.store.redo(docID); session = nil; selection = []; clampPage(); app.scheduleSave() }
     private func clampPage() { pageIndex = min(pageIndex, max(0, pageCount - 1)) }
 
     func setPage(_ i: Int) {
         let n = max(0, min(pageCount - 1, i))
+        scrollRequest = n
+        if isPDF { mk.scrollToPage = n; mk.activeInk = nil }
         guard n != pageIndex else { return }
         pageIndex = n
         session = nil
@@ -420,6 +473,7 @@ final class WorkspaceModel {
     var book: BookGeometry { BookGeometry(pageCount: pageCount, pageIndex: pageIndex, spread: spread) }
 
     func addPage() {
+        if isPDF { mkInsertBlankPage(after: pageIndex); return }
         if type == .journal { addJournalPage(); return }
         var at = pageIndex
         app.mutate(docID) { at = $0.insertPage(after: self.pageIndex) }
@@ -435,19 +489,27 @@ final class WorkspaceModel {
         app.flash("New page added")
     }
     func deletePage(at i: Int) {
+        if isPDF { mkDeletePage(i); return }
         guard pageCount > 1 else { app.flash("A document needs at least one page"); return }
         app.mutate(docID) { $0.deletePage(at: i) }
         clampPage()
         app.flash("Page deleted")
     }
-    func duplicatePage(at i: Int) { app.mutate(docID) { $0.duplicatePage(at: i) }; app.flash("Page duplicated") }
-    func rotatePage(at i: Int) { app.mutate(docID) { $0.rotatePage(at: i) }; app.flash("Page rotated 90°") }
+    func duplicatePage(at i: Int) { if isPDF { mkDuplicatePage(i); return }; app.mutate(docID) { $0.duplicatePage(at: i) }; app.flash("Page duplicated") }
+    func rotatePage(at i: Int) { if isPDF { mkRotatePage(i); return }; app.mutate(docID) { $0.rotatePage(at: i) }; app.flash("Page rotated 90°") }
     func movePage(from: Int, to: Int) {
         let curID = page.id
         app.mutate(docID) { $0.movePage(from: from, to: to) }
         if let i = doc.pageIndex(of: curID) { pageIndex = i }
     }
-    func toggleBookmark() { app.mutate(docID) { $0.toggleBookmark(pageIndex: self.pageIndex) } }
+    func toggleBookmark() {
+        if isPDF {
+            let key = "page:\(pageIndex)"
+            app.mutate(docID) { d in if d.bookmarks.contains(key) { d.bookmarks.removeAll { $0 == key } } else { d.bookmarks.append(key) } }
+            return
+        }
+        app.mutate(docID) { $0.toggleBookmark(pageIndex: self.pageIndex) }
+    }
 
     // MARK: - Selection
 
@@ -463,9 +525,59 @@ final class WorkspaceModel {
         return r
     }
 
-    func clearSelection() { selection = []; selectedComment = nil; selectedField = nil }
+    func clearSelection() { selection = []; selectedComment = nil; selectedField = nil; closeAnnotationPopup(); if isPDF { mkClearSelection() } }
+
+    func openAnnotationPopup() {
+        guard type == .markup, selectedComment != nil else { return }
+        annotationPopup = true
+        annotationProps = false
+        annotationStyleSnapshot = false
+        replyDraft = ""
+    }
+    func closeAnnotationPopup() { annotationPopup = false; annotationProps = false; annotationStyleSnapshot = false }
+
+    // MARK: - Annotation properties (edits the selected marks themselves)
+
+    var selectedStrokeTool: Tool? { currentStrokes.first { selection.contains($0.id) }?.tool }
+
+    static func preset(of s: Stroke) -> StylePreset {
+        StylePreset(color: s.color, width: s.width ?? ToolStyles.base(for: s.tool).width, opacity: s.opacity, lineStyle: s.lineStyle, pressure: nil,
+                    fill: s.fill, fillPattern: s.fillPattern, fillOpacity: s.fillOpacity, background: s.background, backgroundOpacity: s.backgroundOpacity,
+                    borderColor: s.borderColor, borderOpacity: s.borderOpacity, borderWidth: s.borderWidth, font: s.font, fontWeight: s.fontWeight)
+    }
+    static func apply(_ p: StylePreset, to s: inout Stroke) {
+        s.color = p.color; s.width = p.width; s.opacity = p.opacity; s.lineStyle = p.lineStyle
+        s.fill = p.fill; s.fillPattern = p.fillPattern; s.fillOpacity = p.fillOpacity
+        s.background = p.background; s.backgroundOpacity = p.backgroundOpacity
+        s.borderColor = p.borderColor; s.borderOpacity = p.borderOpacity; s.borderWidth = p.borderWidth
+        s.font = p.font; s.fontWeight = p.fontWeight
+    }
+
+    func selectedPreset() -> StylePreset? {
+        currentStrokes.first { selection.contains($0.id) }.map { WorkspaceModel.preset(of: $0) }
+    }
+
+    /// Applies a style change to every selected mark (one undo step per popup session).
+    func updateSelectedStyle(_ body: (inout StylePreset) -> Void) {
+        guard !selection.isEmpty else { return }
+        if !annotationStyleSnapshot { app.mutate(docID) { _ in }; annotationStyleSnapshot = true }
+        let ids = selection
+        let ctx = strokeContext
+        let cid = selectedComment
+        app.patch(docID) { d in
+            var color: String? = nil
+            d.updateStrokes(ids: ids, at: ctx) { s in
+                var p = WorkspaceModel.preset(of: s)
+                body(&p)
+                WorkspaceModel.apply(p, to: &s)
+                if color == nil { color = s.color }
+            }
+            if let cid, let color { d.editComment(cid) { $0.color = color } }
+        }
+    }
 
     func deleteSelection() {
+        if isPDF { mkDeleteSelection(); return }
         guard !selection.isEmpty else { return }
         let n = selection.count
         app.mutate(docID) { $0.removeStrokes(ids: self.selection, at: self.strokeContext) }
@@ -509,6 +621,7 @@ final class WorkspaceModel {
         replyDraft = ""
         selection = Set(doc.strokeIDs(for: id))
         closePopovers()
+        openAnnotationPopup()
     }
     func setStatus(_ id: ID, _ s: CommentStatus) { app.mutate(docID) { $0.editComment(id) { $0.status = s } } }
     func setCommentText(_ id: ID, _ text: String) { app.patch(docID) { $0.editComment(id) { $0.text = text } } }
@@ -583,7 +696,7 @@ final class WorkspaceModel {
     func addFavoritesTab() {
         var s = app.settings
         guard s.favorites.count < 4 else { return }
-        s.favorites.append(FavoritesTab(name: "★ \(s.favorites.count + 1)", pins: ["pen"]))
+        s.favorites.append(FavoritesTab(name: "★ \(s.favorites.count + 1)", pins: ["fineliner"]))
         app.settings = s
         markupTab = .favorites(s.favorites.count - 1)
         renameFavIndex = s.favorites.count - 1
@@ -643,8 +756,8 @@ final class WorkspaceModel {
         // Pen responds to Pencil pressure; Fineliner, Felt tip and Marker keep a constant width.
         var s = Stroke(tool: t, color: st.color, points: [StrokePoint(p.x, p.y, isPencil ? pressure : 0.5)], width: st.width,
                        weight: t == .pen && isPencil ? .pressure : .constant, opacity: st.opacity, lineStyle: st.lineStyle)
-        if t.isShape { s.fill = st.fill ?? st.color; s.fillPattern = st.fillPattern ?? .none; s.fillOpacity = st.fillOpacity ?? 0.5 }
-        if t == .callout { s.fill = st.fill; s.fillPattern = st.fillPattern ?? .none; s.fillOpacity = st.fillOpacity ?? 0.5 }
+        if t.isShape { s.fill = st.fill ?? st.color; s.fillPattern = st.fillPattern ?? FillPattern.none; s.fillOpacity = st.fillOpacity ?? 0.5 }
+        if t == .callout { s.fill = st.fill; s.fillPattern = st.fillPattern ?? FillPattern.none; s.fillOpacity = st.fillOpacity ?? 0.5 }
         if t == .redact { s.color = "#1c1c1e" }
         return s
     }
@@ -657,10 +770,19 @@ final class WorkspaceModel {
         let p = pagePoint(fromView: s.location, page: i)
         dragMoved = false
         dragPage = i
+        // Touching another page in the vertical scroll makes it current (no scrolling).
+        if i != pageIndex, doc.pages.indices.contains(i) {
+            pageIndex = i
+            session = nil
+            selection = []
+            selectedField = nil
+            closeAnnotationPopup()
+        }
         closePopovers()
+        commitTextEdit()
         let info = tool.info
         // Any touch with a non-select tool deselects the current comment / selection.
-        if info.kind != .select && info.kind != .lasso { selectedComment = nil; selection = []; selectedField = nil }
+        if info.kind != .select && info.kind != .lasso { selectedComment = nil; selection = []; selectedField = nil; closeAnnotationPopup() }
         // Finger on the ruler: move it, rotate it (end handles) or toggle Lock (centre). The Pencil passes through.
         if !s.isPencil, let hit = rulerHit(p) {
             switch hit {
@@ -673,7 +795,9 @@ final class WorkspaceModel {
         // No tool = move the page. Whoever touches first after picking an ink tool decides whether fingers ink or pan.
         let fingerBlocked = !s.isPencil && info.kind == .ink && !fingerMayInk(deciding: false)
         if s.isPencil, info.kind == .ink { _ = fingerMayInk(deciding: true) }
-        if info.kind == .none || fingerBlocked {
+        // A finger with a tap-only tool (stamp, note, text, field, fill) pans if it moves; the tap happens only on a clean lift.
+        let fingerTapTool = !s.isPencil && (info.isTap || info.kind == .fill)
+        if info.kind == .none || fingerBlocked || fingerTapTool {
             // Panning with a finger ends the current ink comment chain.
             session = nil
             if type == .journal && journalView == .book { drag = .flip(x0: Double(s.window.x)); flipDx = 0 } else { drag = .pan(start: s.window, last: s.window, axis: nil) }
@@ -698,9 +822,11 @@ final class WorkspaceModel {
                 // Tap selects first; a drag only moves something that is already selected.
                 if selection.contains(hit.id) {
                     drag = .move(start: p, base: currentStrokes)
+                    pendingTextEditID = (hit.tool == .textbox || hit.tool == .callout) ? hit.id : nil
                 } else {
-                    selection = [hit.id]
-                    selectedComment = hit.commentID
+                    // A mark that belongs to a comment selects the whole comment (all its marks move together).
+                    if let cid = hit.commentID { selection = Set(doc.strokeIDs(for: cid)); selectedComment = cid; openAnnotationPopup() }
+                    else { selection = [hit.id]; selectedComment = nil; closeAnnotationPopup() }
                     drag = nil
                 }
             } else {
@@ -770,14 +896,13 @@ final class WorkspaceModel {
                     st.points = [a, StrokePoint(a.x + u.x, a.y + u.y, pt.p)]
                 }
             case .highlight, .textMarkup:
+                // Text markup only ever attaches to the PDF's text lines.
+                st.points = [st.points[0], pt]
                 if let f = doc.pdfFile {
-                    // Snap to the PDF's text lines; fall back to a freehand band on pages without text.
-                    let a = st.points[0].point
-                    let rects = app.pdf.textLineRects(file: f, index: doc.pages[i].pdfPageIndex ?? i, from: a, to: p, canvas: canvas)
+                    let rects = app.pdf.textLineRects(file: f, index: doc.pages[i].pdfPageIndex ?? i, from: st.points[0].point, to: p, canvas: canvas)
                     st.rects = rects.isEmpty ? nil : rects
-                    st.points = [st.points[0], rects.isEmpty ? StrokePoint(p.x, st.points[0].y, 0.5) : pt]
                 } else {
-                    st.points = [st.points[0], StrokePoint(p.x, st.points[0].y, 0.5)]
+                    st.rects = nil
                 }
             case .shape:
                 if st.tool == .polyline || st.tool == .polygon { st.points.append(pt) } else { st.points = [st.points[0], pt] }
@@ -844,7 +969,11 @@ final class WorkspaceModel {
             }
             let dx = axis == .horizontal ? s.window.x - last.x : 0
             let dy = axis == .vertical ? s.window.y - last.y : 0
-            if dx != 0 || dy != 0 { dragMoved = true; panBy(CGSize(width: dx, height: dy)) }
+            if dx != 0 || dy != 0 {
+                dragMoved = true
+                // Sheets scroll natively (the scroll view cancels this touch once it takes over); notebooks flip.
+                if type == .journal { panBy(CGSize(width: dx, height: dy)) }
+            }
             drag = .pan(start: start, last: s.window, axis: axis)
         }
     }
@@ -887,7 +1016,9 @@ final class WorkspaceModel {
                 clearSelection()
             }
         case .move, .scale:
-            break
+            // A tap (no drag) on an already-selected text box / leader edits its text in place.
+            if !dragMoved, let id = pendingTextEditID, let s = currentStrokes.first(where: { $0.id == id }) { editExisting(s, page: i) }
+            pendingTextEditID = nil
         case .erase:
             eraseSnapshotPending = false
         case .flip:
@@ -928,9 +1059,9 @@ final class WorkspaceModel {
         dragPage = i
     }
 
-    /// Partial erase: cuts the touched part out of ink strokes; other annotations go whole.
+    /// Partial erase: cuts the touched part out of ink strokes with the preset's size.
     private func eraseAt(_ p: Point, page i: Int) {
-        let r = max(5, 10 / zoom)
+        let r = max(2, style(for: .eraser).width / 2)
         let ctx = context(page: i)
         guard doc.strokes(at: ctx).contains(where: { $0.tool.kind == .ink && Hit.strokeTouches($0, point: p, radius: r) }) else { return }
         if eraseSnapshotPending { app.mutate(docID) { _ in }; eraseSnapshotPending = false }
@@ -939,6 +1070,9 @@ final class WorkspaceModel {
 
     private func commit(_ strokeIn: Stroke, page i: Int) {
         var st = strokeIn
+        if st.tool.kind == .highlight || st.tool.kind == .textMarkup {
+            guard st.isTextAnchored else { app.flash(doc.pdfFile == nil ? "\(st.tool.label) works on PDF text" : "No text under the \(st.tool.label.lowercased())"); return }
+        }
         if st.tool == .polyline || st.tool == .polygon {
             let simplified = Hit.simplify(st.points.map(\.point), tolerance: 6)
             st.points = simplified.map { StrokePoint($0.x, $0.y, 0.5) }
@@ -947,6 +1081,22 @@ final class WorkspaceModel {
             let a = st.points[0], b = st.points[1]
             if abs(a.x - b.x) < 2 && abs(a.y - b.y) < 2 { return }
         }
+        if st.tool == .callout, st.points.count == 2 {
+            // Leader: tip = drag start, text at drag end, elbow auto-placed on the side facing the tip.
+            let tip = st.points[0].point, anchor = st.points[1].point
+            let elbow = StrokeGeometry.defaultElbow(tip: tip, anchor: anchor, text: "", width: st.width)
+            st.points = [st.points[0], StrokePoint(elbow.x, elbow.y), StrokePoint(anchor.x, anchor.y)]
+            st.text = ""
+            let tb = style(for: .textbox)
+            st.background = tb.background; st.backgroundOpacity = tb.backgroundOpacity ?? 1
+            st.borderColor = tb.borderColor ?? st.color; st.borderOpacity = tb.borderOpacity ?? 1; st.borderWidth = tb.borderWidth ?? 1.5
+            st.font = tb.font; st.fontWeight = tb.fontWeight
+            let author = app.author
+            app.mutate(docID) { _ = $0.addStroke(st, at: self.context(page: i), author: author, session: nil) }
+            session = nil
+            editExisting(st, page: i)
+            return
+        }
         let author = app.author
         let sess = session
         var cid: ID? = nil
@@ -954,6 +1104,13 @@ final class WorkspaceModel {
         if type == .markup {
             // Ink strokes chain into one comment; the comment is not selected while you draw.
             if st.tool.kind == .ink { session = cid } else { session = nil }
+            // A sticky note's content is its comment: open it for typing right away.
+            if st.tool == .note, let cid {
+                selection = [st.id]
+                selectedComment = cid
+                openAnnotationPopup()
+                annotationFocusComment = true
+            }
         }
     }
 
@@ -963,10 +1120,7 @@ final class WorkspaceModel {
         case .place:
             commit(newStroke(tool, at: p, pressure: 0.5, isPencil: false), page: i)
         case .text:
-            textPrompt = p
-            textPromptPage = i
-            textDraft = ""
-            textAlertVisible = true
+            beginTextEdit(at: p, page: i)
         case .stampGallery:
             var s = newStroke(.stamps, at: p, pressure: 0.5, isPencil: false)
             s.color = stampColor; s.text = stampText
@@ -980,16 +1134,98 @@ final class WorkspaceModel {
             if let ft = info.fieldType { placeField(ft, at: p, page: i) }
         case .fill:
             let st = style(for: .fill)
-            if let target = doc.strokes(at: context(page: i)).last(where: { $0.tool.isShape && StrokeGeometry.bounds(of: $0).contains(p) }) {
+            let strokes = doc.strokes(at: context(page: i))
+            // Closed shapes, or pen strokes that close on themselves and contain the tap.
+            let target = strokes.last { s in
+                if s.tool.isShape { return StrokeGeometry.bounds(of: s).contains(p) }
+                return Hit.isClosedInk(s) && Hit.polygon(s.points.map(\.point), contains: p)
+            }
+            if let target {
                 app.mutate(docID) { $0.updateStrokes(ids: [target.id], at: self.context(page: i)) { $0.fill = st.color; $0.fillPattern = .solid; $0.fillOpacity = st.opacity ?? 0.5 } }
-                app.flash("Shape filled")
+                app.flash("Filled")
             } else {
-                app.flash("Bucket fill works on closed shapes — rectangle, ellipse, polygon, cloud")
+                app.flash("Tap inside a closed shape — drawn with a pen or a shape tool")
             }
         default:
             break
         }
     }
+
+    // MARK: - Inline text editing
+
+    func beginTextEdit(at p: Point, page i: Int) {
+        commitTextEdit()
+        textDraft = ""
+        textEdit = TextEdit(page: i, anchor: p, existingID: nil, isLeader: false)
+    }
+
+    func editExisting(_ s: Stroke, page i: Int) {
+        commitTextEdit()
+        textDraft = s.text ?? ""
+        let anchor = s.tool == .callout && s.points.count >= 3 ? s.points[2].point : s.anchor
+        textEdit = TextEdit(page: i, anchor: anchor, existingID: s.id, isLeader: s.tool == .callout)
+        selection = [s.id]
+    }
+
+    /// Commits the inline edit: new text box, updated text, or removal when the text is empty.
+    func commitTextEdit() {
+        guard let te = textEdit else { return }
+        textEdit = nil
+        let txt = textDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ctx = context(page: te.page)
+        if let id = te.existingID {
+            if txt.isEmpty {
+                app.mutate(docID) { $0.removeStrokes(ids: [id], at: ctx) }
+                selection = []
+            } else {
+                app.mutate(docID) { d in
+                    d.updateStrokes(ids: [id], at: ctx) { $0.text = txt }
+                    if let cid = d.strokes(at: ctx).first(where: { $0.id == id })?.commentID { d.editComment(cid) { $0.text = txt } }
+                }
+            }
+            return
+        }
+        guard !txt.isEmpty else { return }
+        textPrompt = te.anchor
+        textPromptPage = te.page
+        textDraft = txt
+        commitText()
+    }
+
+    func cancelTextEdit() {
+        guard let te = textEdit else { return }
+        textEdit = nil
+        if let id = te.existingID, te.isLeader, (currentStrokes.first { $0.id == id }?.text ?? "").isEmpty {
+            app.mutate(docID) { $0.removeStrokes(ids: [id], at: self.context(page: te.page)) }
+        }
+    }
+
+    /// Style used by the inline editor (existing stroke or the current text-box preset).
+    func textEditStyle() -> (fs: Double, color: String, bg: String?, bgo: Double, bc: String, bco: Double, bw: Double, font: String?, weight: TextWeight?) {
+        if let te = textEdit, let id = te.existingID, let s = doc.strokes(at: context(page: te.page)).first(where: { $0.id == id }) {
+            return (10 + (s.width ?? 6), s.color, s.background, s.backgroundOpacity ?? 1, s.borderColor ?? s.color, s.borderOpacity ?? 1, s.borderWidth ?? 0, s.font, s.fontWeight)
+        }
+        let st = style(for: .textbox)
+        return (10 + st.width, st.color, st.background, st.backgroundOpacity ?? (type == .markup ? 1 : 0), st.borderColor ?? st.color, st.borderOpacity ?? 1,
+                st.borderWidth ?? (type == .markup ? 1.5 : 0), st.font, st.fontWeight)
+    }
+
+    // MARK: - Leader handles
+
+    func beginHandle(_ id: ID, index: Int) {
+        app.mutate(docID) { _ in }
+        handleDrag = (id, index)
+    }
+    func dragHandle(to v: CGPoint, page i: Int) {
+        guard let h = handleDrag else { return }
+        let p = pagePoint(fromView: v, page: i)
+        app.patch(docID) { d in
+            d.updateStrokes(ids: [h.id], at: self.context(page: i)) { s in
+                if s.points.indices.contains(h.index) { s.points[h.index] = StrokePoint(p.x, p.y, 0.5) }
+            }
+        }
+    }
+    func endHandle() { handleDrag = nil }
 
     func commitText() {
         guard let p = textPrompt else { return }
@@ -1001,6 +1237,7 @@ final class WorkspaceModel {
         s.text = txt
         s.background = st.background; s.backgroundOpacity = st.backgroundOpacity ?? (type == .markup ? 1 : 0)
         s.borderColor = st.borderColor ?? st.color; s.borderOpacity = st.borderOpacity ?? 1; s.borderWidth = st.borderWidth ?? (type == .markup ? 1.5 : 0)
+        s.font = st.font; s.fontWeight = st.fontWeight
         commit(s, page: textPromptPage)
     }
 

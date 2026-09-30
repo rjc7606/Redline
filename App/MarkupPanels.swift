@@ -11,11 +11,12 @@ struct BookmarksPanel: View {
     var body: some View {
         let doc = editor.doc
         let items: [(id: ID, index: Int, label: String)] = doc.bookmarks.compactMap { id in
+            if id.hasPrefix("page:"), let i = Int(id.dropFirst(5)) { return i < editor.pageCount ? (id, i, "Page \(i + 1)") : nil }
             guard let i = doc.pageIndex(of: id) else { return nil }
             let pg = doc.pages[i]
             return (id, i, pg.label.isEmpty ? "Page \(i + 1)" : pg.label)
         }
-        let current = doc.bookmarks.contains(editor.page.id)
+        let current = editor.isPDF ? doc.bookmarks.contains("page:\(editor.pageIndex)") : doc.bookmarks.contains(editor.page.id)
         ScrollView {
             VStack(spacing: 2) {
                 ForEach(items, id: \.id) { b in
@@ -80,6 +81,10 @@ extension WorkspaceModel {
             }
             walk(root, depth: 0)
             if !out.isEmpty { return out }
+        }
+        if isPDF {
+            for i in 0..<mk.pageCount { out.append(OutlineItem(id: "p\(i)", label: "Page \(i + 1)", pageIndex: i, depth: 0)) }
+            return out
         }
         for (i, pg) in doc.pages.enumerated() {
             out.append(OutlineItem(id: pg.id, label: pg.label.isEmpty ? "Page \(i + 1)" : pg.label, pageIndex: i, depth: 0))

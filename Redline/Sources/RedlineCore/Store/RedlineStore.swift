@@ -27,6 +27,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var blueprint: Bool
     /// Optional so older saved settings still decode; see `fingerDrawingMode`.
     public var fingerDrawing: FingerDrawing?
+    /// Library folders created by the user (paths like "Projects/Meridian"), including empty ones.
+    public var folders: [String]?
     public var fingerDrawingMode: FingerDrawing {
         get { fingerDrawing ?? .auto }
         set { fingerDrawing = newValue }
@@ -151,4 +153,96 @@ public struct RedlineStore: Sendable {
     }
 
     public func count(on shelf: DocumentType) -> Int { data.docs.filter { $0.type == shelf }.count }
+
+    // MARK: library (folders, favorites, recents)
+
+    public func recents(on shelf: DocumentType, limit: Int = 20) -> [Document] {
+        data.docs.filter { $0.type == shelf && $0.lastOpened != nil }
+            .sorted { ($0.lastOpened ?? .distantPast) > ($1.lastOpened ?? .distantPast) }
+            .prefix(limit).map { $0 }
+    }
+
+    public func favorites(on shelf: DocumentType) -> [Document] {
+        documents(on: shelf).filter(\.isFavorite)
+    }
+
+    /// Documents directly inside a folder.
+    public func documents(on shelf: DocumentType, in folder: String) -> [Document] {
+        documents(on: shelf).filter { $0.folderPath == folder }
+    }
+
+    /// Every folder path in use (created or implied by documents), sorted.
+    public var allFolders: [String] {
+        var set = Set(data.settings.folders ?? [])
+        for d in data.docs { var p = d.folderPath; while !p.isEmpty { set.insert(p); p = RedlineStore.parent(of: p) } }
+        for f in Array(set) { var p = RedlineStore.parent(of: f); while !p.isEmpty { set.insert(p); p = RedlineStore.parent(of: p) } }
+        return set.sorted()
+    }
+
+    /// Immediate subfolders of a folder ("" = root).
+    public func subfolders(of folder: String) -> [String] {
+        allFolders.filter { RedlineStore.parent(of: $0) == folder }
+    }
+
+    public static func parent(of path: String) -> String {
+        guard let i = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<i])
+    }
+    public static func name(of path: String) -> String {
+        path.split(separator: "/").last.map(String.init) ?? path
+    }
+
+    /// Creates a folder; returns its path (deduplicated with " 2", " 3"…).
+    @discardableResult
+    public mutating func createFolder(named raw: String, in parent: String) -> String {
+        let base = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "/", with: "-")
+        let name = base.isEmpty ? "New Folder" : base
+        var candidate = parent.isEmpty ? name : parent + "/" + name
+        var n = 2
+        let existing = Set(allFolders)
+        while existing.contains(candidate) { candidate = (parent.isEmpty ? "" : parent + "/") + "\(name) \(n)"; n += 1 }
+        var fs = data.settings.folders ?? []
+        fs.append(candidate)
+        data.settings.folders = fs
+        return candidate
+    }
+
+    public mutating func renameFolder(_ path: String, to raw: String) {
+        let name = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "/", with: "-")
+        guard !name.isEmpty else { return }
+        let parent = RedlineStore.parent(of: path)
+        let newPath = parent.isEmpty ? name : parent + "/" + name
+        guard newPath != path, !allFolders.contains(newPath) else { return }
+        func remap(_ p: String) -> String {
+            if p == path { return newPath }
+            if p.hasPrefix(path + "/") { return newPath + p.dropFirst(path.count) }
+            return p
+        }
+        data.settings.folders = (data.settings.folders ?? []).map(remap)
+        for i in data.docs.indices where data.docs[i].folder != nil { data.docs[i].folder = remap(data.docs[i].folderPath) }
+    }
+
+    /// Deletes a folder; its documents and subfolders move up to the parent.
+    public mutating func deleteFolder(_ path: String) {
+        let parent = RedlineStore.parent(of: path)
+        func remap(_ p: String) -> String {
+            if p == path { return parent }
+            if p.hasPrefix(path + "/") { let rest = String(p.dropFirst(path.count + 1)); return parent.isEmpty ? rest : parent + "/" + rest }
+            return p
+        }
+        data.settings.folders = (data.settings.folders ?? []).filter { $0 != path }.map(remap)
+        for i in data.docs.indices { data.docs[i].folder = remap(data.docs[i].folderPath) }
+    }
+
+    public mutating func move(_ id: ID, toFolder folder: String) {
+        patch(id) { $0.folder = folder }
+    }
+
+    public mutating func setFavorite(_ id: ID, _ on: Bool) {
+        patch(id) { $0.favorite = on }
+    }
+
+    public mutating func noteOpened(_ id: ID, now: Date = Date()) {
+        patch(id) { $0.lastOpened = now }
+    }
 }

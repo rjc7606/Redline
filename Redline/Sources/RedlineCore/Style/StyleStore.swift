@@ -19,24 +19,28 @@ public struct StylePreset: Codable, Sendable, Equatable, Hashable {
     public var borderColor: String?
     public var borderOpacity: Double?
     public var borderWidth: Double?
+    // text
+    public var font: String?
+    public var fontWeight: TextWeight?
 
     public init(color: String, width: Double, opacity: Double? = nil, lineStyle: LineStyle? = nil, pressure: Bool? = nil,
                 fill: String? = nil, fillPattern: FillPattern? = nil, fillOpacity: Double? = nil, background: String? = nil,
-                backgroundOpacity: Double? = nil, borderColor: String? = nil, borderOpacity: Double? = nil, borderWidth: Double? = nil) {
+                backgroundOpacity: Double? = nil, borderColor: String? = nil, borderOpacity: Double? = nil, borderWidth: Double? = nil,
+                font: String? = nil, fontWeight: TextWeight? = nil) {
         self.color = color; self.width = width; self.opacity = opacity; self.lineStyle = lineStyle; self.pressure = pressure
         self.fill = fill; self.fillPattern = fillPattern; self.fillOpacity = fillOpacity; self.background = background
         self.backgroundOpacity = backgroundOpacity; self.borderColor = borderColor; self.borderOpacity = borderOpacity
-        self.borderWidth = borderWidth
+        self.borderWidth = borderWidth; self.font = font; self.fontWeight = fontWeight
     }
 
-    /// Which colour slot the Style Popover edits.
+    /// Which slot the Style Popover edits (`font` = text colour + family / weight / size).
     public enum Target: String, Sendable, CaseIterable, Hashable {
-        case color = "c", fill = "f", background = "bg", border = "bc"
+        case color = "c", fill = "f", background = "bg", border = "bc", font = "font"
     }
 
     public func color(for target: Target) -> String {
         switch target {
-        case .color: color
+        case .color, .font: color
         case .fill: fill ?? color
         case .background: background ?? "#FFFFFF"
         case .border: borderColor ?? color
@@ -44,7 +48,7 @@ public struct StylePreset: Codable, Sendable, Equatable, Hashable {
     }
     public mutating func setColor(_ hex: String, for target: Target) {
         switch target {
-        case .color: color = hex
+        case .color, .font: color = hex
         case .fill: fill = hex
         case .background: background = hex
         case .border: borderColor = hex
@@ -52,7 +56,7 @@ public struct StylePreset: Codable, Sendable, Equatable, Hashable {
     }
     public func opacity(for target: Target, tool: Tool) -> Double {
         switch target {
-        case .color: opacity ?? ToolStyles.defaultOpacity(for: tool)
+        case .color, .font: opacity ?? ToolStyles.defaultOpacity(for: tool)
         case .fill: fillOpacity ?? 0.5
         case .background: backgroundOpacity ?? (tool == .textbox ? 1 : 0)
         case .border: borderOpacity ?? 1
@@ -60,7 +64,7 @@ public struct StylePreset: Codable, Sendable, Equatable, Hashable {
     }
     public mutating func setOpacity(_ v: Double, for target: Target) {
         switch target {
-        case .color: opacity = v
+        case .color, .font: opacity = v
         case .fill: fillOpacity = v
         case .background: backgroundOpacity = v
         case .border: borderOpacity = v
@@ -118,6 +122,7 @@ public struct ToolStyles: Codable, Sendable, Equatable {
         case .fill: Default(color: "#FFCC00", width: 0, opacity: 0.5)
         case .check: Default(color: "#34C759", width: 4, opacity: nil)
         case .xmark: Default(color: "#FF3B30", width: 4, opacity: nil)
+        case .eraser: Default(color: "#8e8e93", width: 12, opacity: nil)
         default: Default(color: "#e8483f", width: 2.5, opacity: nil)
         }
     }
@@ -133,8 +138,12 @@ public struct ToolStyles: Codable, Sendable, Equatable {
         }
     }
 
+    /// Eraser presets are sizes (diameter in page points).
+    public static let eraserSizes: [Double] = [6, 12, 24, 40]
+
     public static func defaultPresets(for tool: Tool) -> [StylePreset] {
         let d = base(for: tool)
+        if tool == .eraser { return eraserSizes.map { StylePreset(color: d.color, width: $0) } }
         if tool == .textbox {
             return [
                 StylePreset(color: "#FF3B30", width: 5, background: "#FFFFFF", backgroundOpacity: 1, borderColor: "#FF3B30", borderOpacity: 1, borderWidth: 1.5),
@@ -158,15 +167,15 @@ public struct ToolStyles: Codable, Sendable, Equatable {
     /// Slider range for the weight control.
     public static func widthRange(for tool: Tool) -> ClosedRange<Double> {
         switch tool {
-        case .pen: 1...6
-        case .fineliner: 0.5...3
-        case .felt: 2...10
-        case .marker: 6...30
-        case .highlighter: 10...36
-        case .rect, .ellipse: 1...8
+        case .pen: 1...12
+        case .fineliner: 0.5...6
+        case .felt: 2...20
+        case .marker: 6...40
+        case .highlighter: 10...40
         case .textbox: 1...14
-        case .signature: 1...6
-        default: 1...8
+        case .signature: 1...8
+        case .eraser: 2...80
+        default: 1...16
         }
     }
     public static func widthStep(for tool: Tool) -> Double {

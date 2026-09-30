@@ -27,7 +27,12 @@ struct WorkspaceView: View {
                     }
                 }
                 .overlay(alignment: .topTrailing) {
-                    if editor.type == .markup, editor.onFormsTab, let fid = editor.selectedField,
+                    if editor.isPDF, editor.onFormsTab, let w = editor.mk.selected.first(where: { $0.isWidget }) {
+                        PDFFieldInspector(editor: editor, widget: w)
+                            .padding(.top, 14)
+                            .padding(.trailing, (editor.sidebarOpen ? editor.sidebarWidth : 0) + 14)
+                            .popIn()
+                    } else if editor.type == .markup, !editor.isPDF, editor.onFormsTab, let fid = editor.selectedField,
                        let f = editor.page.fields.first(where: { $0.id == fid }) {
                         FieldInspector(editor: editor, field: f)
                             .padding(.top, 14)
@@ -35,7 +40,11 @@ struct WorkspaceView: View {
                             .popIn()
                     }
                 }
-                .overlay { if editor.organizeOpen { OrganizePagesView(editor: editor).transition(.opacity) } }
+                .overlay {
+                    if editor.organizeOpen {
+                        Group { if editor.isPDF { PDFOrganizePages(editor: editor) } else { OrganizePagesView(editor: editor) } }.transition(.opacity)
+                    }
+                }
             }
             .overlay(alignment: .top) { popovers.padding(.top, Metrics.barHeight * 2 + 6) }
             .overlayPreferenceValue(ToolAnchorKey.self) { anchors in PresetsDropdownHost(editor: editor, anchors: anchors) }
@@ -51,11 +60,6 @@ struct WorkspaceView: View {
         .animation(.easeInOut(duration: 0.16), value: editor.popover)
         .animation(.easeInOut(duration: 0.16), value: editor.organizeOpen)
         .animation(.easeInOut(duration: 0.16), value: editor.flatten)
-        .alert("Text", isPresented: $editor.textAlertVisible) {
-            TextField("Text", text: $editor.textDraft)
-            Button("Add") { editor.commitText() }
-            Button("Cancel", role: .cancel) { editor.textPrompt = nil }
-        }
         .alert("Layer name", isPresented: $editor.layerRenameVisible) {
             TextField("Name", text: $editor.renameDraft)
             Button("Rename") { editor.commitLayerRename() }
@@ -75,7 +79,9 @@ struct WorkspaceView: View {
     @ViewBuilder
     private var content: some View {
         switch editor.type {
-        case .markup, .drawing:
+        case .markup:
+            if editor.isPDF { MarkupCanvas(editor: editor) } else { SheetCanvasArea(editor: editor) }
+        case .drawing:
             SheetCanvasArea(editor: editor)
         case .journal:
             if editor.journalView == .book { BookView(editor: editor) } else { CalendarView(editor: editor) }

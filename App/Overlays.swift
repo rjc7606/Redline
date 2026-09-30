@@ -104,10 +104,10 @@ extension WorkspaceModel {
     var exportOptions: [ExportOption] {
         switch type {
         case .markup: [
-            ExportOption(id: "annotated", label: "Annotated PDF", desc: "Flattened marks with the comment list appended", symbol: "doc.text", kind: .commentReport),
-            ExportOption(id: "flat", label: "Flattened PDF", desc: "Ink and form values burned in", symbol: "doc.badge.gearshape", kind: .pdf(.asSeen)),
-            ExportOption(id: "png", label: "Image of this page", desc: "PNG at 2×", symbol: "photo", kind: .png),
-            ExportOption(id: "files", label: "Save to Files", desc: "Flattened PDF in On My iPad › Redline › Exports", symbol: "folder", kind: .saveToFiles)
+            ExportOption(id: "annotated", label: "Share PDF", desc: "The PDF with its annotations — editable in any PDF app", symbol: "doc.text", kind: .pdf(.asSeen)),
+            ExportOption(id: "flat", label: "Share flattened PDF", desc: "Annotations burned into the pages", symbol: "doc.badge.gearshape", kind: .commentReport),
+            ExportOption(id: "png", label: "Image of this page", desc: "PNG", symbol: "photo", kind: .png),
+            ExportOption(id: "files", label: "Save flattened to Files", desc: "On My iPad › Redline › Exports", symbol: "folder", kind: .saveToFiles)
         ]
         case .drawing: [
             ExportOption(id: "seen", label: "PDF — as seen", desc: "Veils applied, exactly like the screen", symbol: "eye", kind: .pdf(.asSeen)),
@@ -145,7 +145,13 @@ struct ExportMenu: View {
                     editor.popover = nil
                     if case .taggedPDF = o.kind, editor.tagFilter == nil { app.flash("Pick a tag in the Tags panel first"); return }
                     if o.kind == .saveToFiles {
-                        if PDFExporter.export(editor: editor, kind: .saveToFiles) != nil { app.flash("Saved to Files › Redline › Exports") } else { app.flash("Export failed") }
+                        let ok = editor.isPDF ? PDFExport.run(.saveToFiles, editor: editor) != nil : PDFExporter.export(editor: editor, kind: .saveToFiles) != nil
+                        app.flash(ok ? "Saved to Files › Redline › Exports" : "Export failed")
+                        return
+                    }
+                    if editor.isPDF {
+                        let url: URL? = (o.kind == .commentReport) ? PDFExport.flattened(editor: editor) : PDFExport.run(o.kind, editor: editor)
+                        if let url { editor.shareURL = url } else { app.flash("Export failed") }
                         return
                     }
                     if let url = PDFExporter.export(editor: editor, kind: o.kind) { editor.shareURL = url } else { app.flash("Export failed") }

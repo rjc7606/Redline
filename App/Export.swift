@@ -6,6 +6,7 @@ import RedlineCore
 @MainActor
 enum PDFExporter {
     static func export(editor: WorkspaceModel, kind: ExportKind) -> URL? {
+        if editor.isPDF { return PDFExport.run(kind, editor: editor) }
         let doc = editor.doc
         let base = doc.name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".pdf", with: "")
         switch kind {

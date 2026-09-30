@@ -110,14 +110,14 @@ public enum ToolCatalog {
 
     /// Markup workspace tabs (excluding the user-defined Favorites tabs).
     public static let markupTabs: [ToolTab] = [
-        ToolTab(id: "draw", label: "Draw", tools: [.pen, .fineliner, .felt, .marker, .fill, .eraser, .rect, .ellipse, .line, .arrow, .dblarrow, .polyline, .polygon, .check, .xmark, .cloud, .distance, .perimeter, .area, .calibrate]),
+        ToolTab(id: "draw", label: "Draw", tools: [.fineliner, .felt, .marker, .fill, .eraser, .rect, .ellipse, .line, .arrow, .dblarrow, .polyline, .polygon, .check, .xmark, .cloud, .distance, .perimeter, .area, .calibrate]),
         ToolTab(id: "annotate", label: "Annotate", tools: [.highlighter, .underline, .strike, .squiggly, .textbox, .note, .callout, .stamps, .signature, .datestamp, .initials]),
         ToolTab(id: "edit", label: "Edit", tools: [.edittext, .image, .link, .redact, .rotatepg, .crop]),
         ToolTab(id: "forms", label: "Forms", tools: [.ftext, .farea, .fcheck, .fradio, .fdrop, .fdate, .fsig, .ftoggle])
     ]
 
     /// Default Favorites tab contents.
-    public static let defaultFavorites: [Tool] = [.highlighter, .pen, .eraser, .textbox, .cloud, .rect, .arrow, .stamps]
+    public static let defaultFavorites: [Tool] = [.highlighter, .fineliner, .eraser, .textbox, .cloud, .rect, .arrow, .stamps]
 
     /// Drawing workspace tools.
     public static let drawingTools: [Tool] = [.select, .pen, .fineliner, .felt, .marker, .eraser, .textbox, .rect, .ellipse]
@@ -149,7 +149,7 @@ public enum ToolCatalog {
         .highlighter: ToolInfo(label: "Highlighter", kind: .highlight, symbol: "highlighter", hasPresets: true),
 
         .fill: ToolInfo(label: "Bucket fill", kind: .fill, glyph: "M18.5 11.5L11 4l-7.6 7.6a1.8 1.8 0 0 0 0 2.5l4.5 4.5a1.8 1.8 0 0 0 2.5 0z", glyph2: "M5.5 2.5L11 8M2.5 12.5h15", glyphFill: "M21.5 19.5a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4z", hasPresets: true),
-        .eraser: ToolInfo(label: "Eraser", kind: .eraser, symbol: "eraser"),
+        .eraser: ToolInfo(label: "Eraser", kind: .eraser, symbol: "eraser", hasPresets: true),
         .rect: ToolInfo(label: "Rectangle", kind: .shape, glyph: "M4 5.5h16v13H4z", hasPresets: true),
         .ellipse: ToolInfo(label: "Ellipse", kind: .shape, glyph: "M3.5 12a8.5 6.5 0 1 0 17 0a8.5 6.5 0 1 0 -17 0", hasPresets: true),
         .line: ToolInfo(label: "Line", kind: .shape, glyph: "M4 20L20 4", hasPresets: true),
@@ -169,8 +169,8 @@ public enum ToolCatalog {
         .strike: ToolInfo(label: "Strikethrough", kind: .textMarkup, symbol: "strikethrough", hasPresets: true),
         .squiggly: ToolInfo(label: "Squiggly", kind: .textMarkup, symbol: "scribble.variable", hasPresets: true),
         .textbox: ToolInfo(label: "Text box", kind: .text, glyph: "M3.5 5h17v14h-17z", glyph2: "M8 8.5h8M8 8.5v1.8M16 8.5v1.8M12 8.5v7M10.3 15.5h3.4", hasPresets: true),
-        .note: ToolInfo(label: "Sticky note", kind: .place, symbol: "note.text", hasPresets: true),
-        .callout: ToolInfo(label: "Callout", kind: .shape, symbol: "text.bubble", hasPresets: true),
+        .note: ToolInfo(label: "Sticky note", kind: .place, glyph: "M6 4h12a2 2 0 0 1 2 2v7h-5a2 2 0 0 0 -2 2v5h-7a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2z", glyph2: "M20 13v.172a2 2 0 0 1 -.586 1.414l-4.828 4.828a2 2 0 0 1 -1.414 .586h-.172", hasPresets: true),
+        .callout: ToolInfo(label: "Callout", kind: .shape, glyph: "M9 3.5h11.5v9H9z", glyph2: "M12 7h5.5M12 9.5h3.5M9 12.5L3.5 20.5M3.5 20.5l.8-4.2M3.5 20.5l4.2-.8", hasPresets: true),
         .stamps: ToolInfo(label: "Stamps", kind: .stampGallery, symbol: "seal"),
         .signature: ToolInfo(label: "Signature", kind: .ink, symbol: "signature", hasPresets: true),
         .datestamp: ToolInfo(label: "Date stamp", kind: .stampPreset, symbol: "calendar.badge.checkmark", stampText: "RECEIVED", stampColor: "#FF3B30"),
@@ -202,6 +202,7 @@ public enum ToolCatalog {
         case .flash: return t.message
         case .stampPreset: return "Tap the page to place \"\(t.stampText ?? "")\""
         case .ink: return rulerLocked ? "Ruler locked — every stroke is a straight line" : "Drag on the page to draw"
+        case .shape where tool == .callout: return "Drag from the arrow tip to where the text goes"
         case .highlight, .textMarkup, .shape: return "Drag on the page — \(t.label.lowercased())"
         case .place, .text, .form: return "Tap the page to place — \(t.label.lowercased())"
         case .eraser: return "Tap or drag over an annotation to erase it"

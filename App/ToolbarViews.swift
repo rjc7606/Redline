@@ -27,7 +27,7 @@ struct ToolButton: View {
         let bg: Color = on ? (c != nil ? theme.hov2 : theme.accent) : .clear
         var glyphFill: Color? = nil
         var glyphStroke: Color? = nil
-        if let st, tool.isShape, (st.fillPattern ?? .none) != .none {
+        if let st, tool.isShape, (st.fillPattern ?? FillPattern.none) != FillPattern.none {
             glyphFill = Color(hex: st.fill ?? st.color, alpha: max(0.3, st.fillOpacity ?? 0.5))
         }
         if let st, tool == .textbox {

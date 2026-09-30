@@ -62,6 +62,19 @@ extension EnvironmentValues {
     }
 }
 
+/// Font for text boxes / callouts: optional family name plus weight (nil = system semibold).
+func textFont(_ name: String?, size: Double, weight: TextWeight?) -> Font {
+    let w: Font.Weight
+    switch weight {
+    case .regular: w = .regular
+    case .medium: w = .medium
+    case .bold: w = .bold
+    case .semibold, nil: w = .semibold
+    }
+    if let name, !name.isEmpty { return Font.custom(name, size: size).weight(w) }
+    return .system(size: size, weight: w)
+}
+
 /// System font at a point size (README type scale).
 func fnt(_ size: Double, _ weight: Font.Weight = .regular) -> Font {
     .system(size: size, weight: weight)

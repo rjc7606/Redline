@@ -14,6 +14,10 @@ public enum Hit {
 
     /// Whether the eraser at `p` (radius `r`) touches the stroke.
     public static func strokeTouches(_ s: Stroke, point p: Point, radius r: Double) -> Bool {
+        if let L = StrokeGeometry.leader(s) {
+            if L.box.insetBy(-r).contains(p) { return true }
+            return distance(p, toSegment: L.attach, L.elbow) <= r + 4 || distance(p, toSegment: L.elbow, L.tip) <= r + 4
+        }
         let info = s.tool.info
         if info.isPathBased {
             let pts = s.points.map(\.point)
@@ -83,6 +87,15 @@ public enum Hit {
             out.append(b)
         }
         return out
+    }
+
+    /// Whether an ink stroke roughly closes on itself (so it can be bucket-filled).
+    public static func isClosedInk(_ s: Stroke) -> Bool {
+        guard s.tool.kind == .ink, s.points.count >= 4, let a = s.points.first, let b = s.points.last else { return false }
+        let bb = s.bounds
+        let diag = (bb.w * bb.w + bb.h * bb.h).squareRoot()
+        guard diag > 20 else { return false }
+        return a.point.distance(to: b.point) <= max(24, diag * 0.15)
     }
 
     /// Point-in-polygon (even-odd).

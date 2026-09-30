@@ -7,15 +7,22 @@ extension WorkspaceModel {
     func renderInput(page i: Int, zoom z: Double, interactive: Bool) -> PageRenderInput {
         let pg = doc.pages[min(i, doc.pages.count - 1)]
         var pdf: UIImage? = nil
+        _ = app.pdf.revision   // re-render when a background page render finishes
         if type == .markup, let f = doc.pdfFile { pdf = app.pdfImage(file: f, pageIndex: pg.pdfPageIndex ?? i, canvas: canvas) }
         let showLive = interactive && i == dragPage
+        var badges: Set<ID> = []
+        if type == .markup {
+            let commented = Set(doc.comments.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !$0.replies.isEmpty }.map(\.id))
+            var seen: Set<ID> = []
+            for s in pg.strokes { if let cid = s.commentID, commented.contains(cid), !seen.contains(cid) { seen.insert(cid); badges.insert(s.id) } }
+        }
         return PageRenderInput(
             page: pg, docType: type, canvas: canvas, transform: pageTransform(page: i), zoom: z, activeLayer: activeLayer,
             live: showLive ? live : nil, selection: interactive && i == pageIndex ? selection : [],
             eraseHits: showLive ? eraseHits : [], highlightComment: interactive ? selectedComment : nil,
             selectedField: interactive ? selectedField : nil, showFieldTags: interactive && onFormsTab,
             lasso: showLive ? lasso : nil, marquee: showLive ? marquee : nil, blueprint: app.settings.blueprint, pdfImage: pdf,
-            drawingPaper: doc.paper, accentHex: app.settings.theme == .dark ? "#0A84FF" : "#007AFF", showSelection: interactive)
+            pdfLoading: type == .markup && doc.pdfFile != nil && pdf == nil, drawingPaper: doc.paper, accentHex: app.settings.theme == .dark ? "#0A84FF" : "#007AFF", showSelection: interactive, commentBadges: badges)
     }
 }
 
@@ -23,8 +30,10 @@ extension WorkspaceModel {
 struct PageCanvas: View {
     var input: PageRenderInput
     var size: CGSize
+    /// Off-main-thread drawing for thumbnails and previews (interactive pages stay synchronous for Pencil latency).
+    var async: Bool = false
     var body: some View {
-        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: false) { ctx, sz in
+        Canvas(opaque: false, colorMode: .nonLinear, rendersAsynchronously: async) { ctx, sz in
             PageRenderer.draw(input, in: ctx, size: sz)
         }
         .frame(width: size.width, height: size.height)
@@ -37,6 +46,8 @@ struct PageView: View {
     var editor: WorkspaceModel
     var pageIndex: Int
     var interactive = true
+    /// Pinch / two-finger pan handled by the page itself (notebooks). Off inside the native scroll view.
+    var ownGestures = true
     @State private var scaling = false
 
     var body: some View {
@@ -56,9 +67,22 @@ struct PageView: View {
                     onCancel: { editor.pointerCancel() },
                     onPinch: { editor.pinch(by: $0) },
                     onPan: { editor.panBy($0) },
-                    onPencilTap: { editor.pencilDoubleTap() }
+                    onPencilTap: { editor.pencilDoubleTap() },
+                    nativeGestures: ownGestures
                 )
                 .frame(width: size.width, height: size.height)
+                if let te = editor.textEdit, te.page == pageIndex {
+                    InlineTextEditor(editor: editor, pageIndex: pageIndex, anchor: te.anchor)
+                }
+                if pageIndex == editor.pageIndex, editor.selection.count == 1, editor.textEdit == nil,
+                   let lead = editor.currentStrokes.first(where: { editor.selection.contains($0.id) }), lead.tool == .callout, lead.points.count >= 3 {
+                    ForEach([0, 1], id: \.self) { idx in
+                        LeaderHandle(editor: editor, pageIndex: pageIndex, stroke: lead, index: idx, space: space)
+                    }
+                }
+                if editor.annotationPopup, pageIndex == editor.pageIndex, editor.textEdit == nil {
+                    AnnotationPopup(editor: editor, pageIndex: pageIndex)
+                }
                 if editor.ruler.on, pageIndex == editor.pageIndex {
                     // Display only: finger touches on it are routed through the canvas input (Pencil passes through to draw).
                     RulerView(editor: editor, pageIndex: pageIndex).allowsHitTesting(false)
@@ -91,6 +115,74 @@ struct PageView: View {
     }
 }
 
+/// Editable text box drawn on the page at the tap point (Return or tapping elsewhere commits).
+struct InlineTextEditor: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: WorkspaceModel
+    var pageIndex: Int
+    var anchor: Point
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let z = editor.zoom
+        let st = editor.textEditStyle()
+        let fs = st.fs * z
+        let vp = editor.viewPoint(fromPage: anchor, page: pageIndex)
+        HStack(alignment: .top, spacing: 4 * z) {
+            TextField("Text", text: $editor.textDraft, axis: .vertical)
+                .font(textFont(st.font, size: fs, weight: st.weight))
+                .foregroundStyle(Color(hex: st.color))
+                .textFieldStyle(.plain)
+                .lineLimit(1...8)
+                .frame(width: max(120, 240 * z))
+                .focused($focused)
+                .onSubmit { editor.commitTextEdit() }
+            Button { editor.commitTextEdit() } label: {
+                Image(systemName: "checkmark").font(.system(size: max(11, 12 * z), weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 24, height: 24).background(Circle().fill(theme.accent))
+            }.buttonStyle(.plain)
+        }
+        .padding(.horizontal, 6 * z).padding(.vertical, 3 * z)
+        .background(RoundedRectangle(cornerRadius: 3 * z).fill(Color(hex: st.bg ?? "#ffffff", alpha: st.bgo)))
+        .overlay(RoundedRectangle(cornerRadius: 3 * z).stroke(Color(hex: st.bc, alpha: st.bco), lineWidth: max(1, st.bw * z)))
+        .overlay(RoundedRectangle(cornerRadius: 3 * z).stroke(theme.accent.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3])).padding(-3))
+        .fixedSize(horizontal: false, vertical: true)
+        .offset(x: vp.x - 6 * z, y: vp.y - fs - 3 * z)
+        .onAppear { focused = true }
+    }
+}
+
+/// Drag handle for a leader's arrow tip (index 0) or elbow (index 1).
+struct LeaderHandle: View {
+    @Environment(\.theme) private var theme
+    var editor: WorkspaceModel
+    var pageIndex: Int
+    var stroke: Stroke
+    var index: Int
+    var space: String
+    @State private var dragging = false
+
+    var body: some View {
+        let vp = editor.viewPoint(fromPage: stroke.points[index].point, page: pageIndex)
+        Circle()
+            .fill(theme.card)
+            .overlay(Circle().strokeBorder(theme.accent, lineWidth: 2.5))
+            .overlay(Image(systemName: index == 0 ? "arrow.up.left" : "arrow.left.and.right").font(fnt(10, .bold)).foregroundStyle(theme.accent))
+            .frame(width: 24, height: 24)
+            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+            .position(vp)
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .named(space))
+                    .onChanged { v in
+                        if !dragging { dragging = true; editor.beginHandle(stroke.id, index: index) }
+                        editor.dragHandle(to: v.location, page: pageIndex)
+                    }
+                    .onEnded { _ in dragging = false; editor.endHandle() }
+            )
+            .accessibilityLabel(index == 0 ? "Arrow tip" : "Elbow")
+    }
+}
+
 // MARK: - UIKit input (Apple Pencil pressure, two-finger pan/pinch)
 
 struct CanvasInputView: UIViewRepresentable {
@@ -101,6 +193,7 @@ struct CanvasInputView: UIViewRepresentable {
     var onPinch: (Double) -> Void
     var onPan: (CGSize) -> Void
     var onPencilTap: () -> Void
+    var nativeGestures: Bool = true
 
     func makeUIView(context: Context) -> TouchView {
         let v = TouchView()
@@ -111,6 +204,7 @@ struct CanvasInputView: UIViewRepresentable {
     private func apply(_ v: TouchView) {
         v.onDown = onDown; v.onMove = onMove; v.onUp = onUp; v.onCancel = onCancel; v.onPinch = onPinch; v.onPan = onPan
         v.onPencilTap = onPencilTap
+        v.gesturesEnabled = nativeGestures
     }
 }
 
@@ -122,6 +216,10 @@ final class TouchView: UIView, UIGestureRecognizerDelegate, UIPencilInteractionD
     var onPinch: ((Double) -> Void)?
     var onPan: ((CGSize) -> Void)?
     var onPencilTap: (() -> Void)?
+    /// When false (inside the pages scroll view) the scroll view owns pinch and two-finger pan.
+    var gesturesEnabled = true { didSet { pinch.isEnabled = gesturesEnabled; pan.isEnabled = gesturesEnabled } }
+    private let pinch = UIPinchGestureRecognizer()
+    private let pan = UIPanGestureRecognizer()
 
     private var active: UITouch?
 
@@ -129,10 +227,10 @@ final class TouchView: UIView, UIGestureRecognizerDelegate, UIPencilInteractionD
         super.init(frame: frame)
         backgroundColor = .clear
         isMultipleTouchEnabled = true
-        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
+        pinch.addTarget(self, action: #selector(pinched(_:)))
         pinch.delegate = self
         addGestureRecognizer(pinch)
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
+        pan.addTarget(self, action: #selector(panned(_:)))
         pan.minimumNumberOfTouches = 2
         pan.maximumNumberOfTouches = 2
         pan.delegate = self
@@ -198,23 +296,16 @@ final class TouchView: UIView, UIGestureRecognizerDelegate, UIPencilInteractionD
 
 struct SheetCanvasArea: View {
     @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
     var editor: WorkspaceModel
-    @State private var fitted = false
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                theme.canvas
-                PageView(editor: editor, pageIndex: editor.pageIndex)
-                    .offset(editor.pan)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .clipped()
-            .onAppear { if !fitted { fitted = true; editor.fitZoom(available: geo.size) } }
-            .onChange(of: geo.size) { _, s in editor.fitZoom(available: s) }
-            .overlay(alignment: .top) { if !editor.selection.isEmpty && !editor.organizeOpen { SelectionBar(editor: editor).padding(.top, 14) } }
-            .overlay(alignment: .bottom) { PageNavPill(editor: editor).padding(.bottom, 14) }
+        ZStack {
+            theme.canvas
+            PagesScrollView(editor: editor, app: app, theme: theme)
         }
+        .clipped()
+        .overlay(alignment: .top) { if !editor.selection.isEmpty && !editor.organizeOpen { SelectionBar(editor: editor).padding(.top, 14) } }
     }
 }
 
@@ -239,30 +330,5 @@ struct SelectionBar: View {
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.popSolid).shadow(color: .black.opacity(0.18), radius: 9, y: 4))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.line, lineWidth: 1))
         .popIn()
-    }
-}
-
-struct PageNavPill: View {
-    @Environment(\.theme) private var theme
-    var editor: WorkspaceModel
-    var body: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 2) {
-                Button { editor.prevPage() } label: {
-                    Image(systemName: "chevron.left").font(fnt(15, .semibold)).foregroundStyle(editor.pageIndex > 0 ? theme.ink2 : theme.dis).frame(width: 34, height: 32)
-                }.buttonStyle(.plain).disabled(editor.pageIndex == 0)
-                Text("Page \(editor.pageIndex + 1) of \(editor.pageCount)").font(fnt(12.5, .bold)).foregroundStyle(theme.ink1).padding(.horizontal, 8)
-                Button { editor.nextPage() } label: {
-                    Image(systemName: "chevron.right").font(fnt(15, .semibold)).foregroundStyle(editor.pageIndex < editor.pageCount - 1 ? theme.ink2 : theme.dis).frame(width: 34, height: 32)
-                }.buttonStyle(.plain).disabled(editor.pageIndex >= editor.pageCount - 1)
-            }
-            .padding(4)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.popSolid).shadow(color: .black.opacity(0.18), radius: 9, y: 4))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.line, lineWidth: 1))
-            Text("\(Int((editor.zoom * 100).rounded()))%")
-                .font(fnt(12, .semibold)).foregroundStyle(.white)
-                .padding(.horizontal, 14).padding(.vertical, 6)
-                .background(Capsule().fill(Color(hex: "#1e1e20", alpha: 0.82)))
-        }
     }
 }

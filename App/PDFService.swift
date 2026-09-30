@@ -2,15 +2,49 @@ import UIKit
 import PDFKit
 import RedlineCore
 
-/// PDFKit access for imported markups: page rendering at the document's canvas size,
+/// Wraps a PDFPage so it can cross into the render actor (PDFKit pages are safe to draw off the main thread one at a time).
+struct RenderablePage: @unchecked Sendable {
+    let page: PDFPage
+}
+
+/// Serial background renderer: one page at a time, never on the main thread.
+actor PDFRenderQueue {
+    static let shared = PDFRenderQueue()
+
+    /// Renders `page` into a white bitmap of `size` pixels, scaling its displayed size `disp` to fit exactly.
+    func render(_ wrapped: RenderablePage, size: CGSize, disp: CGSize) -> UIImage {
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = 1
+        fmt.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+            let cg = ctx.cgContext
+            cg.setFillColor(UIColor.white.cgColor)
+            cg.fill(CGRect(origin: .zero, size: size))
+            cg.saveGState()
+            cg.scaleBy(x: size.width / disp.width, y: size.height / disp.height)
+            cg.translateBy(x: 0, y: disp.height)
+            cg.scaleBy(x: 1, y: -1)
+            cg.interpolationQuality = .high
+            wrapped.page.draw(with: .mediaBox, to: cg)
+            cg.restoreGState()
+        }
+    }
+}
+
+/// PDFKit access for imported markups: page images (rendered asynchronously, cached), thumbnails,
 /// and text-line geometry so highlights snap to the page's text.
 @MainActor
+@Observable
 final class PDFService {
-    private var docs: [String: PDFDocument] = [:]
-    private var images: [String: UIImage] = [:]
-    private var imageOrder: [String] = []
+    /// Bumped whenever a background render finishes; views read it to refresh.
+    private(set) var revision = 0
+
+    @ObservationIgnored private var docs: [String: PDFDocument] = [:]
+    @ObservationIgnored private var images: [String: UIImage] = [:]
+    @ObservationIgnored private var imageOrder: [String] = []
+    @ObservationIgnored private var thumbs: [String: UIImage] = [:]
+    @ObservationIgnored private var pending: Set<String> = []
     private let maxImages = 12
-    private var thumbs: [String: UIImage] = [:]
 
     /// Imported PDFs live in Documents/PDFs so they show up in the Files app.
     static var directory: URL {
@@ -30,11 +64,20 @@ final class PDFService {
 
     func page(_ file: String, _ index: Int) -> PDFPage? { document(file)?.page(at: index) }
 
+    /// Drops cached page images and thumbnails (the PDF changed) but keeps the loaded document.
+    func invalidateImages(_ file: String) {
+        for k in images.keys where k.hasPrefix(file + "#") { images[k] = nil }
+        for k in thumbs.keys where k.hasPrefix("t:" + file + "#") { thumbs[k] = nil }
+        imageOrder.removeAll { $0.hasPrefix(file + "#") }
+        revision += 1
+    }
+
     func forget(_ file: String) {
         docs[file] = nil
-        for k in thumbs.keys where k.hasPrefix(file + "#") { thumbs[k] = nil }
         for k in images.keys where k.hasPrefix(file + "#") { images[k] = nil }
+        for k in thumbs.keys where k.hasPrefix("t:" + file + "#") { thumbs[k] = nil }
         imageOrder.removeAll { $0.hasPrefix(file + "#") }
+        revision += 1
     }
 
     // MARK: geometry
@@ -59,60 +102,47 @@ final class PDFService {
         return Size(1000, (1000 * s.height / s.width).rounded())
     }
 
-    // MARK: rendering
+    // MARK: rendering (async)
 
-    /// Renders a page at 2× the canvas size (white background).
+    /// Full page at 2× the canvas size. Returns the cached image, or nil while it renders in the background.
     func image(file: String, index: Int, canvas: Size) -> UIImage? {
         let key = "\(file)#\(index)"
         if let img = images[key] { return img }
-        guard let page = page(file, index) else { return nil }
-        let disp = PDFService.displaySize(page)
-        guard disp.width > 0, disp.height > 0 else { return nil }
-        let scale = 2.0
-        let size = CGSize(width: canvas.w * scale, height: canvas.h * scale)
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = 1
-        fmt.opaque = true
-        let img = UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
-            let cg = ctx.cgContext
-            cg.setFillColor(UIColor.white.cgColor)
-            cg.fill(CGRect(origin: .zero, size: size))
-            cg.saveGState()
-            cg.scaleBy(x: size.width / disp.width, y: size.height / disp.height)
-            cg.translateBy(x: 0, y: disp.height)
-            cg.scaleBy(x: 1, y: -1)
-            cg.interpolationQuality = .high
-            page.draw(with: .mediaBox, to: cg)
-            cg.restoreGState()
-        }
-        images[key] = img
-        imageOrder.append(key)
-        if imageOrder.count > maxImages { let old = imageOrder.removeFirst(); images[old] = nil }
-        return img
+        request(key: key, file: file, index: index, width: canvas.w * 2, thumb: false)
+        return nil
     }
 
-    /// Small (400 px wide) rendering of a page for the home screen tiles.
+    /// Small (400 px wide) rendering for the home tiles; nil while it renders.
     func thumbnail(file: String, index: Int) -> UIImage? {
-        let key = "\(file)#\(index)"
+        let key = "t:\(file)#\(index)"
         if let t = thumbs[key] { return t }
-        guard let page = page(file, index) else { return nil }
+        request(key: key, file: file, index: index, width: 400, thumb: true)
+        return nil
+    }
+
+    private func request(key: String, file: String, index: Int, width: Double, thumb: Bool) {
+        guard !pending.contains(key), let page = page(file, index) else { return }
         let disp = PDFService.displaySize(page)
-        guard disp.width > 0, disp.height > 0 else { return nil }
-        let size = CGSize(width: 400, height: (400 * disp.height / disp.width).rounded())
-        let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = 1
-        fmt.opaque = true
-        let img = UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
-            let cg = ctx.cgContext
-            cg.setFillColor(UIColor.white.cgColor)
-            cg.fill(CGRect(origin: .zero, size: size))
-            cg.scaleBy(x: size.width / disp.width, y: size.height / disp.height)
-            cg.translateBy(x: 0, y: disp.height)
-            cg.scaleBy(x: 1, y: -1)
-            page.draw(with: .mediaBox, to: cg)
+        guard disp.width > 0, disp.height > 0 else { return }
+        pending.insert(key)
+        let size = CGSize(width: width, height: (width * disp.height / disp.width).rounded())
+        let wrapped = RenderablePage(page: page)
+        Task { [weak self] in
+            let img = await PDFRenderQueue.shared.render(wrapped, size: size, disp: disp)
+            self?.store(key: key, image: img, thumb: thumb)
         }
-        thumbs[key] = img
-        return img
+    }
+
+    private func store(key: String, image: UIImage, thumb: Bool) {
+        pending.remove(key)
+        if thumb {
+            thumbs[key] = image
+        } else {
+            images[key] = image
+            imageOrder.append(key)
+            if imageOrder.count > maxImages { let old = imageOrder.removeFirst(); images[old] = nil }
+        }
+        revision += 1
     }
 
     // MARK: text
@@ -140,9 +170,9 @@ final class PDFService {
         return out
     }
 
-    /// Whether the page has any selectable text at all (used to fall back to freehand highlighting).
+    /// Whether the page has any selectable text at all.
     func hasText(file: String, index: Int) -> Bool {
         guard let page = page(file, index) else { return false }
-        return (page.numberOfCharacters) > 0
+        return page.numberOfCharacters > 0
     }
 }

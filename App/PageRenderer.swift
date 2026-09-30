@@ -20,16 +20,20 @@ struct PageRenderInput: Equatable {
     var marquee: Rect?
     var blueprint: Bool
     var pdfImage: UIImage?
+    /// The page image is still rendering in the background.
+    var pdfLoading: Bool = false
     var drawingPaper: Paper
     var accentHex: String
     var showSelection: Bool = true
+    /// Stroke ids that carry the "has a comment" badge (first mark of each commented annotation).
+    var commentBadges: Set<ID> = []
 
     static func == (a: PageRenderInput, b: PageRenderInput) -> Bool {
         a.page == b.page && a.docType == b.docType && a.transform == b.transform && a.zoom == b.zoom && a.activeLayer == b.activeLayer
             && a.live == b.live && a.selection == b.selection && a.eraseHits == b.eraseHits && a.highlightComment == b.highlightComment
             && a.selectedField == b.selectedField && a.showFieldTags == b.showFieldTags && a.lasso == b.lasso && a.marquee == b.marquee
-            && a.blueprint == b.blueprint && a.pdfImage === b.pdfImage && a.drawingPaper == b.drawingPaper && a.accentHex == b.accentHex
-            && a.showSelection == b.showSelection
+            && a.blueprint == b.blueprint && a.pdfImage === b.pdfImage && a.pdfLoading == b.pdfLoading && a.drawingPaper == b.drawingPaper && a.accentHex == b.accentHex
+            && a.showSelection == b.showSelection && a.commentBadges == b.commentBadges
     }
 }
 
@@ -40,7 +44,7 @@ enum PageRenderer {
 
     static func paperHex(_ input: PageRenderInput) -> String {
         switch input.docType {
-        case .markup: input.blueprint ? blueprintPaper : "#ffffff"
+        case .markup: input.pdfImage != nil ? "#ffffff" : (input.blueprint ? blueprintPaper : input.page.paper.hex)
         case .drawing: input.drawingPaper.hex
         case .journal: input.page.paper.hex
         }
@@ -63,6 +67,8 @@ enum PageRenderer {
         case .markup:
             if let img = input.pdfImage {
                 ctx.draw(Image(uiImage: img), in: pageRect)
+            } else if input.pdfLoading {
+                drawLoadingPlaceholder(in: ctx, W: W, H: H)
             } else {
                 drawTemplate(input.page.template, paperDark: input.blueprint, in: ctx, W: W, H: H)
             }
@@ -92,6 +98,14 @@ enum PageRenderer {
             if let live = input.live { drawStroke(live, in: ctx, dim: false, glow: false, accent: accent) }
         }
 
+        // "Has a comment" badges
+        if !input.commentBadges.isEmpty {
+            for s in input.page.strokes where input.commentBadges.contains(s.id) {
+                let b = StrokeGeometry.bounds(of: s)
+                drawCommentBadge(at: CGPoint(x: b.maxX, y: b.minY), scale: 1 / input.zoom, in: ctx, accent: accent)
+            }
+        }
+
         // Form fields
         for f in input.page.fields {
             drawField(f, selected: f.id == input.selectedField, showTag: input.showFieldTags || f.id == input.selectedField, in: ctx, accent: accent)
@@ -116,6 +130,31 @@ enum PageRenderer {
             ctx.fill(Path(r), with: .color(accent.opacity(0.08)))
             ctx.stroke(Path(r), with: .color(accent), style: StrokeStyle(lineWidth: 1.5 / input.zoom, dash: [6, 4]))
         }
+    }
+
+    /// Neutral page shown while the PDF renders in the background (marks still draw on top).
+    static func drawLoadingPlaceholder(in ctx: GraphicsContext, W: Double, H: Double) {
+        ctx.fill(Path(CGRect(x: 0, y: 0, width: W, height: H)), with: .color(Color(hex: "#f4f4f6")))
+        var lines = Path()
+        var y = 60.0
+        while y < H - 40 { lines.addRoundedRect(in: CGRect(x: 56, y: y, width: (W - 112) * (y.truncatingRemainder(dividingBy: 90) == 0 ? 0.55 : 0.9), height: 10), cornerSize: CGSize(width: 5, height: 5)); y += 30 }
+        ctx.fill(lines, with: .color(Color(hex: "#e2e2e6")))
+        let t = Text("Loading page…").font(.system(size: 14, weight: .semibold)).foregroundStyle(Color(hex: "#8e8e93"))
+        ctx.draw(t, at: CGPoint(x: W / 2, y: H / 2), anchor: .center)
+    }
+
+    /// Small speech-bubble dot marking an annotation that has comment text or replies.
+    static func drawCommentBadge(at c: CGPoint, scale k: Double, in ctx: GraphicsContext, accent: Color) {
+        let r = 9 * k
+        let circle = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+        ctx.drawLayer { layer in
+            layer.addFilter(.shadow(color: .black.opacity(0.25), radius: 2 * k, y: 1 * k))
+            layer.fill(circle, with: .color(accent))
+        }
+        ctx.stroke(circle, with: .color(.white), lineWidth: 1.5 * k)
+        var dots = Path()
+        for dx in [-0.42, 0.0, 0.42] { dots.addEllipse(in: CGRect(x: c.x + dx * r - 0.15 * r, y: c.y - 0.15 * r, width: 0.3 * r, height: 0.3 * r)) }
+        ctx.fill(dots, with: .color(.white))
     }
 
     // MARK: templates
@@ -168,6 +207,7 @@ enum PageRenderer {
             }
             return
         }
+        if s.tool == .callout { drawLeader(s, in: ctx, dim: dim, glow: glow, accent: accent); return }
         switch s.tool.kind {
         case .text: drawTextBox(s, in: ctx, dim: dim, glow: glow, accent: accent)
         case .stampGallery, .stampPreset: drawStamp(s, in: ctx, dim: dim, glow: glow, accent: accent)
@@ -204,9 +244,34 @@ enum PageRenderer {
         }
     }
 
+    /// Leader: text box plus attach → elbow → arrow tip.
+    static func drawLeader(_ s: Stroke, in ctx: GraphicsContext, dim: Bool, glow: Bool, accent: Color) {
+        let w = max(1.5, StrokeGeometry.width(of: s) * 0.35)
+        let color = Color(hex: s.color, alpha: s.opacity ?? 1)
+        if let L = StrokeGeometry.leader(s) {
+            let path = StrokeGeometry.leaderPath(L, width: w).path()
+            ctx.drawLayer { layer in
+                if dim { layer.opacity = 0.15 }
+                if glow { layer.stroke(path, with: .color(accent.opacity(0.35)), style: StrokeStyle(lineWidth: w + 8, lineCap: .round, lineJoin: .round)) }
+                layer.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: w, lineCap: .round, lineJoin: .round))
+            }
+            var box = s
+            box.tool = .textbox
+            box.points = [StrokePoint(L.anchor.x, L.anchor.y)]
+            drawTextBox(box, in: ctx, dim: dim, glow: glow, accent: accent)
+        } else if s.points.count >= 2 {
+            // Still being dragged: straight arrow from tip to the future box position.
+            let a = s.points[0].point, b = s.points[1].point
+            let L = StrokeGeometry.Leader(tip: a, elbow: b, attach: b, box: Rect(x: b.x, y: b.y, w: 0, h: 0), anchor: b)
+            ctx.stroke(StrokeGeometry.leaderPath(L, width: w).path(), with: .color(color), style: StrokeStyle(lineWidth: w, lineCap: .round, lineJoin: .round))
+        }
+    }
+
     static func drawTextBox(_ s: Stroke, in ctx: GraphicsContext, dim: Bool, glow: Bool, accent: Color) {
         let fs = 10 + (s.width ?? 6)
-        let text = Text(s.text ?? "").font(.system(size: fs, weight: .semibold)).foregroundStyle(Color(hex: s.color, alpha: s.opacity ?? 1))
+        let empty = (s.text ?? "").isEmpty
+        let text = Text(empty ? "Text" : (s.text ?? "")).font(textFont(s.font, size: fs, weight: s.fontWeight))
+            .foregroundStyle(empty ? Color(hex: "#8e8e93", alpha: 0.7) : Color(hex: s.color, alpha: s.opacity ?? 1))
         let resolved = ctx.resolve(text)
         let size = resolved.measure(in: CGSize(width: 600, height: 400))
         let a = s.anchor
