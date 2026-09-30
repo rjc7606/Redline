@@ -112,19 +112,23 @@ struct PalettesSettings: View {
                     .padding(.horizontal, 4).padding(.bottom, 10)
                     ForEach(ps.listed) { p in
                         let on = p.id == edP.id
-                        VStack(alignment: .leading, spacing: 9) {
+                        VStack(alignment: .leading, spacing: 10) {
                             HStack(spacing: 8) {
                                 Text(p.name).font(fnt(14, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
                                 Spacer()
-                                if p.id == ps.defaultID { tag("Default", theme.accent, theme.accent.opacity(0.12)) }
-                                if p.builtIn { tag("Built in", theme.ink4, theme.hov) }
+                                if p.id == ps.defaultID { tag("Default", theme.accent, theme.accent.opacity(0.16)) }
+                                if p.builtIn { tag("Built in", theme.ink3, theme.bg3) }
                             }
-                            HStack(spacing: 3) { ForEach(Array(p.colors.enumerated()), id: \.offset) { _, c in Rectangle().fill(Color(hex: c)) } }
-                                .frame(height: 22).clipShape(RoundedRectangle(cornerRadius: 6))
+                            HStack(spacing: 4) {
+                                ForEach(Array(p.colors.prefix(8).enumerated()), id: \.offset) { _, c in
+                                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color(hex: c)).frame(width: 28, height: 28)
+                                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.black.opacity(0.08), lineWidth: 1))
+                                }
+                            }
                         }
-                        .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 10)
-                        .background(RoundedRectangle(cornerRadius: 12).fill(on ? theme.card : .clear))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(on ? theme.accent : theme.hov2, lineWidth: 1.5))
+                        .padding(.horizontal, 12).padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.card))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(on ? theme.accent : theme.line, lineWidth: on ? 2 : 1))
                         .contentShape(Rectangle())
                         .onTapGesture { app.settingsPaletteID = p.id; app.settingsSwatch = 0 }
                     }
@@ -138,8 +142,8 @@ struct PalettesSettings: View {
     }
 
     private func tag(_ text: String, _ fg: Color, _ bg: Color) -> some View {
-        Text(text.uppercased()).font(fnt(10, .bold)).tracking(0.4).foregroundStyle(fg)
-            .padding(.horizontal, 6).padding(.vertical, 2).background(RoundedRectangle(cornerRadius: 5).fill(bg))
+        Text(text.uppercased()).font(fnt(10, .bold)).tracking(0.3).foregroundStyle(fg)
+            .padding(.horizontal, 6).frame(height: 20).background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(bg))
     }
 }
 

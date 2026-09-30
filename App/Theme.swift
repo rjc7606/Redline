@@ -40,7 +40,18 @@ struct Theme: Sendable {
     var hov: Color { Color(hex: tokens.overlayBase, alpha: tokens.hovAlpha) }
     var hov2: Color { Color(hex: tokens.overlayBase, alpha: tokens.hov2Alpha) }
     var canvas: Color { Color(hex: tokens.canvas) }
-    var danger: Color { Color(hex: "#FF3B30") }
+    var danger: Color { Color(hex: tokens.danger) }
+    var field: Color { Color(hex: tokens.field) }
+    var popShadow: Color { Color.black.opacity(tokens.popShadowAlpha) }
+
+    /// Status chip colours: Open is amber, everything else counts as resolved.
+    func chip(for status: CommentStatus) -> (bg: Color, fg: Color) {
+        switch status {
+        case .open: (Color(hex: tokens.chipOpenBg, alpha: tokens.chipOpenBgAlpha), Color(hex: tokens.chipOpenFg))
+        case .rejected: (Color(hex: tokens.danger, alpha: isDark ? 0.16 : 0.12), Color(hex: tokens.danger))
+        default: (Color(hex: tokens.chipResolvedBg, alpha: tokens.chipResolvedBgAlpha), Color(hex: tokens.chipResolvedFg))
+        }
+    }
 
     static func resolve(_ pref: ThemePreference, systemDark: Bool) -> Theme {
         switch pref {

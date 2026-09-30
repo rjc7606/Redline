@@ -9,8 +9,8 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             SegmentControl(options: editor.sideTabs.map { SegmentOption(value: $0, label: $0.label) },
                            selection: Binding(get: { editor.sideTab }, set: { editor.sideTab = $0 }),
-                           fontSize: 10.5, vPad: 4, hPad: 4, radius: 8, fill: true)
-                .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 6)
+                           fontSize: 13, vPad: 5, hPad: 4, radius: 8, fill: true)
+                .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 0)
             switch editor.sideTab {
             case .comments: if editor.isPDF { PDFCommentsPanel(editor: editor) } else { CommentsPanel(editor: editor) }
             case .bookmarks: BookmarksPanel(editor: editor)
@@ -39,15 +39,15 @@ struct CommentsPanel: View {
             HStack(spacing: 4) {
                 ForEach(AuthorFilter.allCases, id: \.self) { f in
                     let on = editor.authorFilter == f
-                    Text(f.rawValue).font(fnt(11, .bold))
+                    Text(f.rawValue).font(fnt(12, .semibold))
                         .foregroundStyle(on ? theme.bg : theme.ink2)
-                        .padding(.horizontal, 10).padding(.vertical, 4)
+                        .padding(.horizontal, 12).frame(height: 26)
                         .background(Capsule().fill(on ? theme.ink1 : theme.hov))
                         .onTapGesture { editor.authorFilter = f }
                 }
                 Spacer()
             }
-            .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 8)
+            .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
             ScrollView {
                 LazyVStack(spacing: 6) {
                     let items = editor.visibleComments
@@ -79,7 +79,6 @@ struct CommentCard: View {
         let kindTool = Tool(rawValue: comment.kind)
         let isInk = kindTool?.isPen ?? false
         let label = (kindTool?.label ?? "Mark") + (isInk ? " · " + Formatting.plural(strokeCount, "stroke") : "")
-        let chip = comment.status.chip
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 7) {
                 RoundedRectangle(cornerRadius: 3).fill(Color(hex: comment.color)).frame(width: 10, height: 10)
@@ -99,12 +98,7 @@ struct CommentCard: View {
                 Spacer(minLength: 2)
                 Menu {
                     ForEach(CommentStatus.allCases, id: \.self) { s in Button(s.rawValue) { editor.setStatus(comment.id, s) } }
-                } label: {
-                    Text(comment.status.rawValue).font(fnt(10.5, .bold)).foregroundStyle(Color(hex: chip.fg))
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(hex: chip.fg, alpha: chip.alpha)))
-                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.line, lineWidth: 1))
-                }
+                } label: { StatusChip(status: comment.status, height: 18) }
             }
             if open {
                 TextField("Add comment text…", text: Binding(get: { comment.text }, set: { editor.setCommentText(comment.id, $0) }), axis: .vertical)
@@ -285,29 +279,29 @@ struct PagesPanel: View {
                 ForEach(Array(editor.doc.pages.enumerated()), id: \.element.id) { i, pg in
                     let on = i == editor.pageIndex
                     HStack(spacing: 10) {
-                        PageThumbnail(editor: editor, pageIndex: i, width: 44)
+                        PageThumbnail(editor: editor, pageIndex: i, width: 40)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(editor.type == .journal ? BookGeometry.longLabel(for: i) : (pg.label.isEmpty ? "Page \(i + 1)" : pg.label))
-                                .font(fnt(12.5, .bold)).foregroundStyle(theme.ink1).lineLimit(1)
-                            Text(meta(pg, i)).font(fnt(10.5)).foregroundStyle(theme.ink4).lineLimit(1)
+                                .font(fnt(14, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+                            Text(meta(pg, i)).font(fnt(12, .medium)).foregroundStyle(theme.ink4).lineLimit(1)
                         }
                         Spacer(minLength: 0)
-                        Button { editor.deletePage(at: i) } label: {
-                            Image(systemName: "xmark").font(fnt(10, .bold)).foregroundStyle(theme.ink4).frame(width: 20, height: 20)
-                        }.buttonStyle(.plain).opacity(0.4)
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: 9).fill(on ? theme.accentSoft : .clear))
+                    .padding(.horizontal, 10)
+                    .frame(height: 64)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(on ? theme.card : .clear))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(theme.accent, lineWidth: on ? 2 : 0))
                     .contentShape(Rectangle())
                     .onTapGesture { editor.setPage(i); if editor.type == .journal { editor.journalView = .book } }
+                    .contextMenu {
+                        Button("Duplicate", systemImage: "doc.on.doc") { editor.duplicatePage(at: i) }
+                        Button("Delete page", systemImage: "trash", role: .destructive) { editor.deletePage(at: i) }
+                    }
                 }
-                Button { editor.addPage() } label: {
-                    HStack(spacing: 6) { Image(systemName: "plus").font(fnt(13, .bold)); Text("Add page").font(fnt(12.5, .bold)) }
-                        .foregroundStyle(theme.accent).frame(maxWidth: .infinity).padding(9)
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
-                }.buttonStyle(.plain)
+                HStack { SecondaryButton(label: "Add page", symbol: "plus") { editor.addPage() }.frame(maxWidth: .infinity) }
+                    .padding(.top, 6)
             }
-            .padding(.horizontal, 10).padding(.top, 2).padding(.bottom, 12)
+            .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 12)
         }
     }
 
@@ -345,10 +339,10 @@ struct LayersPanel: View {
         ScrollView {
             VStack(spacing: 6) {
                 Button { editor.addLayer() } label: {
-                    HStack(spacing: 6) { Image(systemName: "plus").font(fnt(13, .bold)); Text("Add layer").font(fnt(12.5, .bold)) }
-                        .foregroundStyle(theme.accent).frame(maxWidth: .infinity).padding(9)
-                        .overlay(RoundedRectangle(cornerRadius: 9).stroke(theme.accent.opacity(0.4), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
-                }.buttonStyle(.plain)
+                    HStack(spacing: 6) { Image(systemName: "plus").font(fnt(14, .semibold)); Text("Add layer").font(fnt(14, .semibold)) }
+                        .foregroundStyle(theme.ink1).frame(maxWidth: .infinity).frame(height: 36)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.bg3))
+                }.buttonStyle(.plain).padding(.bottom, 4)
                 ForEach(editor.page.layers.reversed()) { L in
                     LayerRow(editor: editor, layer: L)
                 }
@@ -360,9 +354,9 @@ struct LayersPanel: View {
                     }.buttonStyle(.plain).padding(.top, 4)
                 }
                 Text("Layers veil everything beneath them. Ink on each layer stays full strength; hidden layers lift their veil.")
-                    .font(fnt(11)).foregroundStyle(theme.ink4).lineSpacing(3).padding(.vertical, 6).padding(.horizontal, 2)
+                    .font(fnt(12)).foregroundStyle(theme.ink4).lineSpacing(3).padding(.top, 12).padding(.horizontal, 2)
             }
-            .padding(.horizontal, 10).padding(.top, 2).padding(.bottom, 12)
+            .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 12)
         }
     }
 }
@@ -376,22 +370,23 @@ struct LayerRow: View {
         let active = (editor.activeLayerObject?.id) == layer.id
         let menuOpen = editor.layerMenu == layer.id
         VStack(spacing: 8) {
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 LayerThumbnail(layer: layer, canvas: editor.canvas)
-                    .frame(width: 64, height: 45)
+                    .frame(width: 48, height: 34)
                     .background(RoundedRectangle(cornerRadius: 5).fill(layer.kind == .base ? Color.white : Color.white.opacity(0.3 + layer.opacity * 0.7)))
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(theme.line, lineWidth: 1))
                     .clipShape(RoundedRectangle(cornerRadius: 5))
-                Text(layer.name).font(fnt(12.5, .bold)).foregroundStyle(theme.ink1).lineLimit(1)
+                Text(layer.name).font(fnt(14, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
                 Spacer(minLength: 0)
                 Button { editor.editLayer(layer.id) { $0.visible.toggle() } } label: {
-                    Image(systemName: layer.visible ? "eye" : "eye.slash").font(fnt(14, .medium)).foregroundStyle(layer.visible ? theme.ink2 : theme.ink4).frame(width: 26, height: 26)
+                    Image(systemName: layer.visible ? "eye" : "eye.slash").font(fnt(18, .medium)).foregroundStyle(layer.visible ? theme.ink3 : theme.ink4).frame(width: 32, height: 32)
                 }.buttonStyle(.plain)
                 Button { editor.layerMenu = menuOpen ? nil : layer.id; editor.activeLayer = layer.id } label: {
-                    Image(systemName: "ellipsis").font(fnt(14, .medium)).foregroundStyle(theme.ink3).frame(width: 26, height: 26)
+                    Image(systemName: "ellipsis").font(fnt(18, .medium)).foregroundStyle(theme.ink3).frame(width: 32, height: 32)
                         .background(RoundedRectangle(cornerRadius: 6).fill(menuOpen ? theme.hov : .clear))
                 }.buttonStyle(.plain)
             }
+            .frame(height: 40)
             if menuOpen {
                 VStack(spacing: 6) {
                     if layer.isTrace {
@@ -411,9 +406,10 @@ struct LayerRow: View {
                 .overlay(alignment: .top) { Rectangle().fill(theme.line).frame(height: 1) }
             }
         }
-        .padding(.horizontal, 9).padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(active ? theme.accent : theme.line, lineWidth: 1.5))
+        .padding(.horizontal, 8).padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(active ? theme.card : .clear))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(theme.accent, lineWidth: active ? 2 : 0))
+        .overlay(alignment: .bottom) { if !active { Rectangle().fill(theme.line).frame(height: 1).padding(.horizontal, 8) } }
         .opacity(layer.visible ? 1 : 0.55)
         .contentShape(Rectangle())
         .onTapGesture { editor.activeLayer = layer.id }

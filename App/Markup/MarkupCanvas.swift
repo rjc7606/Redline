@@ -21,18 +21,29 @@ struct MarkupCanvas: View {
         .clipped()
         .overlay(alignment: .top) {
             if !mk.selected.isEmpty && !editor.organizeOpen {
-                HStack(spacing: 2) {
+                // Selection bar (handoff v2): 40 tall, radius 12, one line, 12 pt gaps.
+                HStack(spacing: 12) {
                     Text(mk.selected.filter(\.isPrimary).count <= 1 ? "1 selected" : "\(mk.selected.filter(\.isPrimary).count) selected")
-                        .font(fnt(12.5, .bold)).foregroundStyle(theme.ink3).padding(.leading, 8).padding(.trailing, 10)
+                        .font(fnt(13, .semibold)).foregroundStyle(theme.ink2)
+                    if mk.selected.filter(\.isPrimary).count == 1, !mk.annotationPopup, !(mk.selectedPrimary?.isWidget ?? false) {
+                        Button { mk.annotationPopup = true; mk.annotationProps = false; mk.focusComment = true } label: {
+                            HStack(spacing: 5) { Image(systemName: "text.bubble").font(fnt(15, .medium)); Text("Comment").font(fnt(13, .semibold)) }
+                                .foregroundStyle(theme.ink1).frame(height: 40).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                    }
                     Button { editor.mkDeleteSelection() } label: {
-                        Label("Delete", systemImage: "trash").font(fnt(13, .semibold)).foregroundStyle(theme.danger).padding(.horizontal, 12).frame(height: 36)
+                        HStack(spacing: 5) { Image(systemName: "trash").font(fnt(15, .medium)); Text("Delete").font(fnt(13, .semibold)) }
+                            .foregroundStyle(theme.danger).frame(height: 40).contentShape(Rectangle())
                     }.buttonStyle(.plain)
                     Button { editor.mkClearSelection() } label: {
-                        Image(systemName: "xmark").font(fnt(15, .semibold)).foregroundStyle(theme.ink3).frame(width: 36, height: 36)
-                    }.buttonStyle(.plain)
+                        Image(systemName: "xmark").font(fnt(13, .bold)).foregroundStyle(theme.ink3).frame(width: 28, height: 28).contentShape(Rectangle())
+                    }.buttonStyle(.plain).accessibilityLabel("Clear selection")
                 }
-                .padding(4)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.popSolid).shadow(color: .black.opacity(0.18), radius: 9, y: 4))
+                .lineLimit(1)
+                .padding(.leading, 14).padding(.trailing, 8)
+                .frame(height: 40)
+                .fixedSize(horizontal: true, vertical: false)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.popSolid).shadow(color: theme.popShadow.opacity(0.6), radius: 9, y: 4))
                 .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.line, lineWidth: 1))
                 .padding(.top, 14)
             }
@@ -68,6 +79,7 @@ struct PDFViewRepresentable: UIViewRepresentable {
         if v.document !== editor.mk.pdf { v.document = editor.mk.pdf }
         v.backgroundColor = canvasColor
         context.coordinator.editor = editor
+        context.coordinator.configureScrolling(v)
         context.coordinator.ensureOverlay(in: v)
         context.coordinator.overlay.setNeedsDisplay()
         if let i = editor.mk.scrollToPage {
@@ -79,6 +91,15 @@ struct PDFViewRepresentable: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: PDFView, coordinator: Coordinator) {
         coordinator.detach()
+    }
+
+    /// PDFKit's internal scroll view (may be nested).
+    static func scrollView(in view: UIView) -> UIScrollView? {
+        for sub in view.subviews {
+            if let sv = sub as? UIScrollView { return sv }
+            if let found = scrollView(in: sub) { return found }
+        }
+        return nil
     }
 
     @MainActor
@@ -113,21 +134,29 @@ struct PDFViewRepresentable: UIViewRepresentable {
             observers.append(center.addObserver(forName: .PDFViewPageChanged, object: v, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.pageChanged(v) }
             })
-            if let sv = v.subviews.compactMap({ $0 as? UIScrollView }).first {
-                let direct = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-                sv.panGestureRecognizer.allowedTouchTypes = direct
-                sv.pinchGestureRecognizer?.allowedTouchTypes = direct
-                // Free panning in any direction; vertical always rubber-bands, horizontal only when the page is wider than the view.
-                sv.alwaysBounceVertical = true
-                sv.alwaysBounceHorizontal = false
-                sv.isDirectionalLockEnabled = false
-                sv.delaysContentTouches = false
-                sv.canCancelContentTouches = true
+            if let sv = PDFViewRepresentable.scrollView(in: v) {
                 offsetObservation = sv.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
                     MainActor.assumeIsolated { self?.viewportChanged() }
                 }
             }
+            configureScrolling(v)
             ensureOverlay(in: v)
+        }
+
+        /// PDFKit may reset its scroll view; re-applied on every layout pass.
+        func configureScrolling(_ v: PDFView) {
+            guard let sv = PDFViewRepresentable.scrollView(in: v) else { return }
+            let direct = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
+            if sv.panGestureRecognizer.allowedTouchTypes != direct { sv.panGestureRecognizer.allowedTouchTypes = direct }
+            if let pinch = sv.pinchGestureRecognizer, pinch.allowedTouchTypes != direct { pinch.allowedTouchTypes = direct }
+            // Free panning in any direction with rubber-band snap-back on every side.
+            if !sv.alwaysBounceVertical { sv.alwaysBounceVertical = true }
+            if !sv.alwaysBounceHorizontal { sv.alwaysBounceHorizontal = true }
+            if sv.isDirectionalLockEnabled { sv.isDirectionalLockEnabled = false }
+            if sv.delaysContentTouches { sv.delaysContentTouches = false }
+            if !sv.canCancelContentTouches { sv.canCancelContentTouches = true }
+            if !sv.bounces { sv.bounces = true }
+            if !sv.isScrollEnabled { sv.isScrollEnabled = true }
         }
 
         /// Keeps the drawing overlay on top of PDFKit's document view (which PDFKit may recreate).
@@ -145,7 +174,7 @@ struct PDFViewRepresentable: UIViewRepresentable {
 
         private func viewportChanged() {
             editor.mk.viewportTick += 1
-            if let v = overlay.pdfView { ensureOverlay(in: v) }
+            if let v = overlay.pdfView { ensureOverlay(in: v); configureScrolling(v) }
             overlay.setNeedsDisplay()
         }
 
@@ -235,6 +264,16 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                 }
                 return
             }
+            if let a = badgeHit(at: s.location, page: page) {
+                // Badge tap: select and open the comment popup (the sidebar is left alone).
+                active = nil
+                dragPage = nil
+                editor.mkSelect(a, on: page)
+                editor.mk.annotationPopup = true
+                editor.mk.focusComment = true
+                setNeedsDisplay()
+                return
+            }
             editor.mkPointerDown(s, page: page, at: p)
             setNeedsDisplay()
         } else if active != nil {
@@ -273,6 +312,23 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
     }
 
     private enum HandleHit { case resize, leader(PDFAnnotation, Int) }
+
+    /// The "has a comment" badge under a touch, if any.
+    private func badgeHit(at loc: CGPoint, page: PDFPage) -> PDFAnnotation? {
+        for a in page.annotations where a.isPrimary && !a.isWidget && editor.mkHasComment(a, on: page) {
+            let c = badgeCenter(for: a, on: page)
+            if hypot(loc.x - c.x, loc.y - c.y) <= 16 { return a }
+        }
+        return nil
+    }
+
+    /// Badge centre (overlay space): 4 pt above the topmost point of the ink (bounds top for other kinds), 20 pt tall.
+    private func badgeCenter(for a: PDFAnnotation, on page: PDFPage) -> CGPoint {
+        var top = CGPoint(x: a.bounds.midX, y: a.bounds.maxY)
+        if a.subtype == "Ink", let m = AnnotationFactory.inkPaths(a).flatMap({ $0 }).max(by: { $0.y < $1.y }) { top = m }
+        let o = overlayPoint(top, on: page)
+        return CGPoint(x: o.x, y: o.y - 4 - 10)
+    }
 
     private func handleHit(at loc: CGPoint, page: PDFPage) -> HandleHit? {
         guard editor.tool == .select, !editor.mk.selected.isEmpty, let sel = editor.mk.selected.first, sel.page === page else { return nil }
@@ -346,8 +402,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         // Comment badges on annotations that carry text or replies
         for page in visiblePages(v) {
             for a in page.annotations where a.isPrimary && !a.isWidget && editor.mkHasComment(a, on: page) {
-                let r = overlayRect(a.bounds, on: page)
-                drawBadge(cg, at: CGPoint(x: r.maxX, y: r.minY), accent: accent)
+                drawBadge(cg, at: badgeCenter(for: a, on: page), color: a.color)
             }
         }
 
@@ -388,15 +443,34 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         cg.setStrokeColor(accent.cgColor); cg.setLineWidth(2.5); cg.strokeEllipse(in: r.insetBy(dx: 1.25, dy: 1.25))
     }
 
-    private func drawBadge(_ cg: CGContext, at c: CGPoint, accent: UIColor) {
-        let r: CGFloat = 9
+    /// 20 pt speech bubble in the annotation's colour: fill mixed 72 % toward white, stroke mixed 28 %, 2 pt, soft shadow.
+    private func drawBadge(_ cg: CGContext, at c: CGPoint, color: UIColor) {
+        let fill = MarkupOverlayView.mix(color, towardWhite: 0.72), stroke = MarkupOverlayView.mix(color, towardWhite: 0.28)
+        let w: CGFloat = 20, h: CGFloat = 15
+        let box = CGRect(x: c.x - w / 2, y: c.y - 10, width: w, height: h)
+        let path = UIBezierPath(roundedRect: box, cornerRadius: 5)
+        // tail toward the annotation (below the bubble)
+        path.move(to: CGPoint(x: c.x - 4, y: box.maxY - 0.5))
+        path.addLine(to: CGPoint(x: c.x - 1, y: c.y + 10))
+        path.addLine(to: CGPoint(x: c.x + 3, y: box.maxY - 0.5))
+        path.close()
         cg.saveGState()
-        cg.setShadow(offset: CGSize(width: 0, height: 1), blur: 2, color: UIColor.black.withAlphaComponent(0.25).cgColor)
-        cg.setFillColor(accent.cgColor); cg.fillEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+        cg.setShadow(offset: CGSize(width: 0, height: 1), blur: 2, color: UIColor.black.withAlphaComponent(0.3).cgColor)
+        cg.setFillColor(fill.cgColor); cg.addPath(path.cgPath); cg.fillPath()
         cg.restoreGState()
-        cg.setStrokeColor(UIColor.white.cgColor); cg.setLineWidth(1.5); cg.strokeEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
-        cg.setFillColor(UIColor.white.cgColor)
-        for dx in [-0.42, 0.0, 0.42] { cg.fillEllipse(in: CGRect(x: c.x + dx * r - 0.15 * r, y: c.y - 0.15 * r, width: 0.3 * r, height: 0.3 * r)) }
+        cg.setStrokeColor(stroke.cgColor); cg.setLineWidth(2); cg.setLineJoin(.round)
+        cg.addPath(path.cgPath); cg.strokePath()
+        // two text lines
+        cg.setLineWidth(1.5); cg.setLineCap(.round)
+        cg.move(to: CGPoint(x: box.minX + 5, y: box.minY + 5.5)); cg.addLine(to: CGPoint(x: box.maxX - 5, y: box.minY + 5.5))
+        cg.move(to: CGPoint(x: box.minX + 5, y: box.minY + 9.5)); cg.addLine(to: CGPoint(x: box.midX + 1, y: box.minY + 9.5))
+        cg.strokePath()
+    }
+
+    static func mix(_ c: UIColor, towardWhite t: CGFloat) -> UIColor {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 1
+        if !c.getRed(&r, green: &g, blue: &b, alpha: &a) { var w: CGFloat = 0; _ = c.getWhite(&w, alpha: &a); r = w; g = w; b = w }
+        return UIColor(red: r + (1 - r) * t, green: g + (1 - g) * t, blue: b + (1 - b) * t, alpha: 1)
     }
 
     private func drawRuler(_ cg: CGContext, page: PDFPage, accent: UIColor) {

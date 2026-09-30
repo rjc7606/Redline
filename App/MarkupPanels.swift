@@ -19,36 +19,37 @@ struct BookmarksPanel: View {
         let current = editor.isPDF ? doc.bookmarks.contains("page:\(editor.pageIndex)") : doc.bookmarks.contains(editor.page.id)
         ScrollView {
             VStack(spacing: 2) {
-                ForEach(items, id: \.id) { b in
-                    HStack(spacing: 9) {
-                        Image(systemName: "bookmark.fill").font(fnt(13)).foregroundStyle(Color(hex: "#FF9500"))
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(b.label).font(fnt(12.5, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
-                            Text("Page \(b.index + 1)").font(fnt(10.5)).foregroundStyle(theme.ink4)
-                        }
-                        Spacer(minLength: 0)
-                        Button { editor.app.mutate(editor.docID) { $0.bookmarks.removeAll { $0 == b.id } } } label: {
-                            Image(systemName: "xmark").font(fnt(10, .bold)).foregroundStyle(theme.ink4).frame(width: 20, height: 20)
-                        }.buttonStyle(.plain).opacity(0.4)
-                    }
-                    .padding(.horizontal, 9).padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(b.index == editor.pageIndex ? theme.accentSoft : .clear))
-                    .contentShape(Rectangle())
-                    .onTapGesture { editor.setPage(b.index) }
-                }
-                if items.isEmpty {
-                    Text("No bookmarks yet.").font(fnt(12)).foregroundStyle(theme.ink4).padding(.vertical, 18)
-                }
                 Button { editor.toggleBookmark() } label: {
-                    Text(current ? "✓ Bookmarked — tap to remove" : "＋ Bookmark this page")
-                        .font(fnt(12, .semibold)).foregroundStyle(current ? theme.ink4 : theme.accent)
-                        .frame(maxWidth: .infinity).padding(8)
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
+                    HStack(spacing: 6) {
+                        Image(systemName: current ? "bookmark.slash" : "bookmark").font(fnt(14, .semibold))
+                        Text(current ? "Remove bookmark" : "Bookmark this page").font(fnt(14, .semibold))
+                    }
+                    .foregroundStyle(theme.ink1).frame(maxWidth: .infinity).frame(height: 36)
+                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.bg3))
                 }
                 .buttonStyle(.plain)
-                .padding(.top, 8).padding(.horizontal, 2)
+                .padding(.bottom, 8)
+                ForEach(items, id: \.id) { b in
+                    HStack(spacing: 10) {
+                        Image(systemName: "bookmark.fill").font(fnt(14)).foregroundStyle(theme.accent)
+                        Text(b.label).font(fnt(14, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text("p.\(b.index + 1)").font(fnt(11, .semibold)).foregroundStyle(theme.ink4)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 44)
+                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(b.index == editor.pageIndex ? theme.hov2 : .clear))
+                    .contentShape(Rectangle())
+                    .onTapGesture { editor.setPage(b.index) }
+                    .contextMenu {
+                        Button("Remove bookmark", systemImage: "bookmark.slash", role: .destructive) { editor.app.mutate(editor.docID) { $0.bookmarks.removeAll { $0 == b.id } } }
+                    }
+                }
+                if items.isEmpty {
+                    Text("No bookmarks yet.").font(fnt(12.5)).foregroundStyle(theme.ink4).padding(.vertical, 18)
+                }
             }
-            .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 12)
+            .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 12)
         }
     }
 }
@@ -102,19 +103,20 @@ struct OutlinePanel: View {
             VStack(spacing: 1) {
                 ForEach(editor.outlineItems) { o in
                     HStack(spacing: 7) {
-                        Text(o.label).font(fnt(o.depth == 0 ? 12.5 : 12, o.depth == 0 ? .bold : .medium))
+                        Text(o.label).font(fnt(o.depth == 0 ? 14 : 13, o.depth == 0 ? .semibold : .medium))
                             .foregroundStyle(o.depth == 0 ? theme.ink1 : theme.ink3).lineLimit(1)
                         Spacer(minLength: 0)
-                        Text("\(o.pageIndex + 1)").font(fnt(10, .semibold)).foregroundStyle(theme.dis)
+                        Text("p.\(o.pageIndex + 1)").font(fnt(11, .semibold)).foregroundStyle(theme.ink4)
                     }
-                    .padding(.vertical, 7).padding(.trailing, 9)
-                    .padding(.leading, 9 + Double(o.depth) * 16)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(o.depth == 0 && o.pageIndex == editor.pageIndex ? theme.accentSoft : .clear))
+                    .padding(.trailing, 10)
+                    .padding(.leading, 10 + Double(o.depth) * 16)
+                    .frame(height: o.depth == 0 ? 44 : 36)
+                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(o.depth == 0 && o.pageIndex == editor.pageIndex ? theme.hov2 : .clear))
                     .contentShape(Rectangle())
                     .onTapGesture { editor.setPage(o.pageIndex) }
                 }
             }
-            .padding(.horizontal, 8).padding(.top, 4).padding(.bottom, 12)
+            .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 12)
         }
     }
 }
@@ -145,6 +147,6 @@ struct FieldInspector: View {
         .frame(width: 262)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-            .shadow(color: Shadows.popover.color, radius: Shadows.popover.radius, y: Shadows.popover.y))
+            .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y))
     }
 }

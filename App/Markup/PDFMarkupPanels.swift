@@ -3,7 +3,7 @@ import PDFKit
 import UniformTypeIdentifiers
 import RedlineCore
 
-// MARK: - Annotations sidebar (from the PDF)
+// MARK: - Comments sidebar (handoff v2 §8): rows, not cards
 
 struct PDFCommentsPanel: View {
     @Environment(\.theme) private var theme
@@ -13,76 +13,131 @@ struct PDFCommentsPanel: View {
         let _ = editor.mk.renderTick
         let items = editor.mkComments()
         VStack(spacing: 0) {
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 ForEach(AuthorFilter.allCases, id: \.self) { f in
                     let on = editor.authorFilter == f
-                    Text(f.rawValue).font(fnt(11, .bold)).foregroundStyle(on ? theme.bg : theme.ink2)
-                        .padding(.horizontal, 10).padding(.vertical, 4)
+                    Text(f.rawValue).font(fnt(12, .semibold)).foregroundStyle(on ? theme.bg : theme.ink2)
+                        .padding(.horizontal, 12).frame(height: 26)
                         .background(Capsule().fill(on ? theme.ink1 : theme.hov))
                         .onTapGesture { editor.authorFilter = f }
                 }
                 Spacer()
             }
-            .padding(.horizontal, 12).padding(.top, 2).padding(.bottom, 8)
+            .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
             ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(items) { c in PDFCommentCard(editor: editor, item: c) }
+                LazyVStack(spacing: 0) {
+                    ForEach(items) { c in PDFCommentRow(editor: editor, item: c) }
                     if items.isEmpty {
                         Text("No annotations yet. Every mark you make is a PDF annotation with your name and time.")
-                            .font(fnt(12)).foregroundStyle(theme.ink4).multilineTextAlignment(.center).lineSpacing(3)
+                            .font(fnt(12.5)).foregroundStyle(theme.ink4).multilineTextAlignment(.center).lineSpacing(3)
                             .padding(.vertical, 22).padding(.horizontal, 12)
                     }
                 }
-                .padding(.horizontal, 8).padding(.bottom, 12)
+                .padding(.horizontal, 12).padding(.bottom, 12)
             }
         }
     }
 }
 
-struct PDFCommentCard: View {
+/// One annotation: collapsed (2-line text) or expanded (full text, Edit / Delete, replies, reply field).
+struct PDFCommentRow: View {
     @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
     var editor: WorkspaceModel
     var item: MarkupComment
+    @FocusState private var editFocused: Bool
 
     var body: some View {
-        let selected = editor.mk.selected.contains { $0 === item.annotation }
-        let chip = item.status.chip
-        VStack(alignment: .leading, spacing: 6) {
+        let mk = editor.mk
+        let selected = mk.selected.contains { $0 === item.annotation }
+        let expanded = mk.expandedComment == item.id
+        let a = item.annotation
+        let who = item.author == app.author ? "You" : item.author
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 7) {
-                RoundedRectangle(cornerRadius: 3).fill(Color(hex: item.colorHex)).frame(width: 10, height: 10)
-                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.black.opacity(0.12), lineWidth: 1))
-                Image(systemName: commentSymbol(for: item.tool.rawValue)).font(fnt(12)).foregroundStyle(theme.ink3)
-                Text(item.tool.label + (item.tool.isPen && item.markCount > 1 ? " · \(item.markCount) strokes" : "")).font(fnt(12.5, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+                RoundedRectangle(cornerRadius: 2).fill(Color(hex: item.colorHex)).frame(width: 10, height: 10)
+                Image(systemName: commentSymbol(for: item.tool.rawValue)).font(fnt(13)).foregroundStyle(theme.ink3)
+                Text(item.tool.label + (item.tool.isPen && item.markCount > 1 ? " · \(item.markCount) strokes" : "")).font(fnt(13.5, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
                 Spacer(minLength: 2)
-                Text("p.\(item.pageIndex + 1)").font(fnt(10.5)).foregroundStyle(theme.ink4)
+                Text("p.\(item.pageIndex + 1)").font(fnt(11, .semibold)).foregroundStyle(theme.ink4)
             }
-            HStack(spacing: 6) {
-                AvatarView(name: item.author, size: 20)
-                Text(item.author).font(fnt(11.5, .semibold)).foregroundStyle(theme.ink2).lineLimit(1)
-                Text(Formatting.ago(item.time)).font(fnt(10.5)).foregroundStyle(theme.ink4)
+            HStack(spacing: 8) {
+                Text("\(who) · \(Formatting.ago(item.time))").font(fnt(12, .medium)).foregroundStyle(theme.ink4).lineLimit(1)
                 Spacer(minLength: 2)
-                Text(item.status.rawValue).font(fnt(10.5, .bold)).foregroundStyle(Color(hex: chip.fg))
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color(hex: chip.fg, alpha: chip.alpha)))
+                if !item.replies.isEmpty { Text(Formatting.plural(item.replies.count, "reply", "replies")).font(fnt(11.5, .semibold)).foregroundStyle(theme.accent) }
+                Menu {
+                    ForEach(CommentStatus.allCases, id: \.self) { s in Button(s.rawValue) { editor.mkSetStatus(a, s) } }
+                } label: { StatusChip(status: item.status, height: 18) }
             }
-            if !item.text.isEmpty { Text(item.text).font(fnt(12)).foregroundStyle(theme.ink2).lineLimit(2).lineSpacing(2) }
-            if !item.replies.isEmpty { Text(Formatting.plural(item.replies.count, "reply", "replies")).font(fnt(11, .semibold)).foregroundStyle(theme.accent) }
+            if expanded {
+                if mk.editingComment {
+                    TextField("Add a comment…", text: Binding(get: { a.contents ?? "" }, set: { editor.mkSetText(a, $0) }), axis: .vertical)
+                        .lineLimit(2...8).font(fnt(13)).foregroundStyle(theme.ink1)
+                        .focused($editFocused)
+                        .padding(.horizontal, 10).padding(.vertical, 8)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
+                        .padding(.top, 4)
+                        .onSubmit { mk.editingComment = false }
+                        .onChange(of: editFocused) { _, f in if !f { mk.editingComment = false } }
+                        .onAppear { editFocused = true }
+                } else if !item.text.isEmpty {
+                    Text(item.text).font(fnt(13)).foregroundStyle(theme.ink1).lineSpacing(2).padding(.top, 2).fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 14) {
+                    if !item.tool.isTextual {
+                        Button(item.text.isEmpty ? "Add text" : "Edit") { mk.editingComment = true }
+                            .font(fnt(12, .semibold)).foregroundStyle(theme.accent).buttonStyle(.plain)
+                    }
+                    Button("Delete") { editor.mkSelectComment(item); editor.mkDeleteSelection() }
+                        .font(fnt(12, .semibold)).foregroundStyle(theme.danger).buttonStyle(.plain)
+                    Spacer()
+                }
+                .padding(.top, 4)
+                ForEach(Array(item.replies.enumerated()), id: \.offset) { _, r in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(r.author == app.author ? "You" : r.author).font(fnt(12, .semibold)).foregroundStyle(theme.ink2)
+                            Text(Formatting.ago(r.time)).font(fnt(11)).foregroundStyle(theme.ink4)
+                        }
+                        Text(r.text).font(fnt(12.5, .medium)).foregroundStyle(theme.ink2).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.leading, 28).padding(.top, 4)
+                }
+                HStack(spacing: 6) {
+                    TextField("Reply…", text: Binding(get: { mk.replyDraft }, set: { mk.replyDraft = $0 }))
+                        .font(fnt(12.5)).foregroundStyle(theme.ink1).padding(.horizontal, 10).frame(height: 32)
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
+                        .onSubmit { editor.mkAddReply(a) }
+                    Button("Reply") { editor.mkAddReply(a) }
+                        .font(fnt(12.5, .semibold)).foregroundStyle(theme.accent).buttonStyle(.plain)
+                }
+                .padding(.top, 6)
+            } else if !item.text.isEmpty {
+                Text(item.text).font(fnt(13)).foregroundStyle(theme.ink2).lineLimit(2).lineSpacing(2).padding(.top, 2)
+            }
         }
-        .padding(.horizontal, 10).padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(selected ? theme.accent : theme.line, lineWidth: 1.5))
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(selected ? theme.card : .clear))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(theme.accent, lineWidth: selected ? 2 : 0))
+        .overlay(alignment: .bottom) { if !selected { Rectangle().fill(theme.line).frame(height: 1) } }
         .contentShape(Rectangle())
-        .onTapGesture { editor.mkSelectComment(item) }
+        .onTapGesture {
+            if expanded { mk.expandedComment = nil; mk.editingComment = false }
+            else { mk.expandedComment = item.id; mk.editingComment = false; editor.mkSelectComment(item) }
+        }
+        .animation(.easeOut(duration: 0.15), value: expanded)
     }
 }
 
-// MARK: - Popup beside the selected annotation
+// MARK: - Popup beside the selected annotation (handoff v2 §6)
 
 struct PDFAnnotationPopup: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
     @Bindable var editor: WorkspaceModel
     @FocusState private var commentFocused: Bool
+    @FocusState private var replyFocused: Bool
     private let width: CGFloat = 300
 
     var body: some View {
@@ -93,110 +148,112 @@ struct PDFAnnotationPopup: View {
            let item = editor.mkComments().first(where: { $0.annotation === a }) ?? Optional(editor.mkItem(a, page: page)) {
             let r = v.convert(b, from: page)
             let fw = v.bounds.width, fh = v.bounds.height
-            let estHeight: CGFloat = mk.annotationProps ? 520 : 260
+            let estHeight: CGFloat = mk.annotationProps ? 560 : 200
             let x = min(max(8, r.midX - width / 2), max(8, fw - width - 8))
             let below = r.maxY + 14 + estHeight <= fh || r.minY - estHeight - 14 < 0
             let y = below ? r.maxY + 14 : max(8, r.minY - estHeight - 14)
-            let textual = [Tool.textbox, .callout, .stamps, .datestamp, .initials].contains(item.tool)
-            VStack(alignment: .leading, spacing: 10) {
+            let who = item.author == app.author ? "You" : item.author
+            VStack(alignment: .leading, spacing: 0) {
+                // 1. Header (pinned): colour · glyph · kind · status · ×
                 HStack(spacing: 8) {
                     RoundedRectangle(cornerRadius: 3).fill(Color(hex: item.colorHex)).frame(width: 12, height: 12)
-                    Image(systemName: commentSymbol(for: item.tool.rawValue)).font(fnt(13)).foregroundStyle(theme.ink3)
-                    Text(item.tool.label + (item.markCount > 1 && item.tool.isPen ? " · \(item.markCount) strokes" : "")).font(fnt(13, .bold)).foregroundStyle(theme.ink1).lineLimit(1)
+                    Image(systemName: commentSymbol(for: item.tool.rawValue)).font(fnt(14)).foregroundStyle(theme.ink3)
+                    Text(item.tool.label + (item.markCount > 1 && item.tool.isPen ? " · \(item.markCount) strokes" : "")).font(fnt(15, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
                     Spacer(minLength: 4)
                     Menu {
                         ForEach(CommentStatus.allCases, id: \.self) { s in Button(s.rawValue) { editor.mkSetStatus(a, s) } }
-                    } label: {
-                        let chip = item.status.chip
-                        Text(item.status.rawValue).font(fnt(10.5, .bold)).foregroundStyle(Color(hex: chip.fg))
-                            .padding(.horizontal, 7).padding(.vertical, 3).background(Capsule().fill(Color(hex: chip.fg, alpha: chip.alpha)))
-                    }
-                    Button { editor.mkClearSelection() } label: {
-                        Image(systemName: "xmark").font(fnt(11, .bold)).foregroundStyle(theme.ink3).frame(width: 24, height: 24).background(Circle().fill(theme.hov))
+                    } label: { StatusChip(status: item.status) }
+                    Button { editor.mkClosePopup() } label: {
+                        Image(systemName: "xmark").font(fnt(12, .bold)).foregroundStyle(theme.ink3).frame(width: 28, height: 28).background(Circle().fill(theme.hov))
                     }.buttonStyle(.plain)
                 }
-                HStack(spacing: 6) {
-                    AvatarView(name: item.author, size: 18)
-                    Text(item.author).font(fnt(11.5, .semibold)).foregroundStyle(theme.ink2).lineLimit(1)
-                    Text(Formatting.ago(item.time)).font(fnt(10.5)).foregroundStyle(theme.ink4)
-                    Spacer()
-                }
-                if !textual {
-                    TextField("Add a comment…", text: Binding(get: { a.contents ?? "" }, set: { editor.mkSetText(a, $0) }), axis: .vertical)
-                        .lineLimit(1...5).font(fnt(13)).foregroundStyle(theme.ink1)
-                        .focused($commentFocused)
-                        .padding(.horizontal, 9).padding(.vertical, 7)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(theme.bg))
-                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line, lineWidth: 1))
-                } else {
-                    Button { editor.mkBeginTextEdit(a, page: page, isNew: false) } label: {
-                        HStack { Text((a.contents ?? "").isEmpty ? "Edit text…" : (a.contents ?? "")).font(fnt(13)).foregroundStyle(theme.ink1).lineLimit(2); Spacer(); Image(systemName: "pencil").foregroundStyle(theme.ink3) }
-                            .padding(.horizontal, 9).padding(.vertical, 7)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(theme.bg))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line, lineWidth: 1))
-                    }.buttonStyle(.plain)
-                }
-                if !item.replies.isEmpty {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(Array(item.replies.enumerated()), id: \.offset) { _, r in
-                                HStack(alignment: .top, spacing: 7) {
-                                    AvatarView(name: r.author, size: 16)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        HStack(spacing: 6) { Text(r.author).font(fnt(11, .bold)).foregroundStyle(theme.ink1); Text(Formatting.ago(r.time)).font(fnt(10)).foregroundStyle(theme.ink4) }
-                                        Text(r.text).font(fnt(12)).foregroundStyle(theme.ink2)
+                .frame(height: 24)
+                .padding(.bottom, 12)
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // 2. Author line
+                        HStack(spacing: 6) {
+                            AvatarView(name: item.author, size: 20)
+                            Text(who).font(fnt(12.5, .semibold)).foregroundStyle(theme.ink2).lineLimit(1)
+                            Text(Formatting.ago(item.time)).font(fnt(12.5, .medium)).foregroundStyle(theme.ink4)
+                            Spacer()
+                        }
+                        // 3. Comment field (text boxes edit their text inline on the page; the field holds the note)
+                        TextField(item.tool.isTextual ? "Text on the page…" : "Add a comment…", text: Binding(get: { a.contents ?? "" }, set: { editor.mkSetText(a, $0) }), axis: .vertical)
+                            .lineLimit(1...6).font(fnt(14, .medium)).foregroundStyle(theme.ink1)
+                            .focused($commentFocused)
+                            .padding(.horizontal, 12).padding(.vertical, 12)
+                            .frame(minHeight: 44)
+                            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
+                        // 4. Replies
+                        if !item.replies.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(item.replies.enumerated()), id: \.offset) { _, rp in
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        HStack(spacing: 6) {
+                                            Text(rp.author == app.author ? "You" : rp.author).font(fnt(12, .semibold)).foregroundStyle(theme.ink2)
+                                            Text(Formatting.ago(rp.time)).font(fnt(11)).foregroundStyle(theme.ink4)
+                                        }
+                                        Text(rp.text).font(fnt(12.5, .medium)).foregroundStyle(theme.ink2).fixedSize(horizontal: false, vertical: true)
                                     }
+                                    .padding(.leading, 28)
                                 }
                             }
                         }
-                        .padding(.leading, 6).overlay(alignment: .leading) { Rectangle().fill(theme.line).frame(width: 2) }
-                    }
-                    .frame(maxHeight: 120)
-                }
-                HStack(spacing: 6) {
-                    TextField("Reply…", text: Binding(get: { mk.replyDraft }, set: { mk.replyDraft = $0 }))
-                        .font(fnt(12)).foregroundStyle(theme.ink1).padding(.horizontal, 9).frame(height: 30)
-                        .background(RoundedRectangle(cornerRadius: 8).fill(theme.bg)).overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line, lineWidth: 1))
-                        .onSubmit { editor.mkAddReply(a) }
-                    Button { editor.mkAddReply(a) } label: {
-                        Text("Reply").font(fnt(12, .bold)).foregroundStyle(.white).padding(.horizontal, 10).frame(height: 30).background(RoundedRectangle(cornerRadius: 8).fill(theme.accent))
-                    }.buttonStyle(.plain)
-                }
-                HStack(spacing: 8) {
-                    if !a.isWidget {
-                        Button { mk.annotationProps.toggle() } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "slider.horizontal.3").font(fnt(13, .semibold)); Text("Properties").font(fnt(12.5, .bold))
-                                Image(systemName: "chevron.down").font(fnt(10, .bold)).rotationEffect(.degrees(mk.annotationProps ? 180 : 0))
+                        // 5. Reply field, only after tapping Reply
+                        if mk.replyFieldOpen {
+                            TextField("Reply…", text: Binding(get: { mk.replyDraft }, set: { mk.replyDraft = $0 }))
+                                .font(fnt(13)).foregroundStyle(theme.ink1).padding(.horizontal, 12).frame(height: 36)
+                                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
+                                .focused($replyFocused)
+                                .onSubmit { editor.mkAddReply(a); mk.replyFieldOpen = false }
+                                .onAppear { replyFocused = true }
+                        }
+                        // 6. Footer: Properties ⌄ · Reply · trash
+                        HStack(spacing: 12) {
+                            if !a.isWidget {
+                                SecondaryButton(label: "Properties", symbol: "slider.horizontal.3", height: 32, chevron: true, open: mk.annotationProps) {
+                                    withAnimation(.easeOut(duration: 0.15)) { mk.annotationProps.toggle() }
+                                }
                             }
-                            .foregroundStyle(mk.annotationProps ? .white : theme.ink2).padding(.horizontal, 12).frame(height: 32)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(mk.annotationProps ? theme.accent : theme.bg3))
-                        }.buttonStyle(.plain)
+                            Spacer()
+                            Button(mk.replyFieldOpen ? "Send" : "Reply") {
+                                if mk.replyFieldOpen { editor.mkAddReply(a); mk.replyFieldOpen = false } else { mk.replyFieldOpen = true }
+                            }
+                            .font(fnt(12.5, .semibold)).foregroundStyle(theme.accent).buttonStyle(.plain)
+                            Button { editor.mkDeleteSelection() } label: {
+                                Image(systemName: "trash").font(fnt(15, .medium)).foregroundStyle(theme.danger).frame(width: 32, height: 32)
+                                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(theme.bg3))
+                            }.buttonStyle(.plain).accessibilityLabel("Delete")
+                        }
+                        .frame(height: 32)
+                        // 7. Properties: the Style editor, embedded
+                        if mk.annotationProps, let preset = editor.mkSelectedPreset(), let tool = editor.mkSelectedTool {
+                            Rectangle().fill(theme.line).frame(height: 1).padding(.top, 2)
+                            StylePopoverView(editor: editor, stroke: preset, apply: { body in editor.mkUpdateSelectedStyle(body) }, forTool: tool, showPresets: false, embedded: true)
+                                .frame(width: width - 28)
+                                .padding(.top, 2)
+                        }
                     }
-                    Spacer()
-                    Button { editor.mkDeleteSelection() } label: {
-                        HStack(spacing: 6) { Image(systemName: "trash").font(fnt(13, .semibold)); Text("Delete").font(fnt(12.5, .bold)) }
-                            .foregroundStyle(theme.danger).padding(.horizontal, 12).frame(height: 32).background(RoundedRectangle(cornerRadius: 8).fill(theme.bg3))
-                    }.buttonStyle(.plain)
                 }
-                if mk.annotationProps, let preset = editor.mkSelectedPreset(), let tool = editor.mkSelectedTool {
-                    Rectangle().fill(theme.line).frame(height: 1)
-                    ScrollView(showsIndicators: false) {
-                        StylePopoverView(editor: editor, stroke: preset, apply: { body in editor.mkUpdateSelectedStyle(body) }, forTool: tool, showPresets: false)
-                    }
-                    .frame(maxHeight: 300)
-                }
+                .frame(maxHeight: 560 - 28 - 36)
+                .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(12)
+            .padding(14)
             .frame(width: width)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-                .shadow(color: Shadows.popover.color, radius: Shadows.popover.radius, y: Shadows.popover.y))
+                .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y))
             .offset(x: x, y: y)
             .popIn()
             .onAppear { if mk.focusComment { commentFocused = true; mk.focusComment = false } }
         }
     }
+}
+
+extension Tool {
+    /// Tools whose `contents` is the text drawn on the page (edited inline, not as a comment).
+    var isTextual: Bool { [Tool.textbox, .callout, .stamps, .datestamp, .initials].contains(self) }
 }
 
 extension WorkspaceModel {
@@ -205,6 +262,12 @@ extension WorkspaceModel {
         MarkupComment(id: a.stableID, annotation: a, pageIndex: mk.index(of: page), tool: a.redlineTool,
                       author: (a.userName ?? "").isEmpty ? "Unknown" : a.userName!, time: a.modificationDate ?? Date(),
                       text: a.contents ?? "", replies: [], status: .open, colorHex: PDFColors.hex(a.color), markCount: 1)
+    }
+
+    func mkClosePopup() {
+        mk.annotationPopup = false
+        mk.annotationProps = false
+        mk.replyFieldOpen = false
     }
 }
 
@@ -248,15 +311,17 @@ struct PDFTextEditor: View {
     }
 }
 
-// MARK: - Organize pages (PDF)
+// MARK: - Organize pages (PDF) — 160 pt thumbnails, action pill below the selected page
 
 struct PDFOrganizePages: View {
     @Environment(\.theme) private var theme
     var editor: WorkspaceModel
+    @State private var selected: Int? = nil
 
     var body: some View {
         let _ = editor.mk.renderTick
         let count = editor.mk.pageCount
+        let sel = selected ?? editor.pageIndex
         VStack(spacing: 0) {
             HStack {
                 Text("Organize Pages").font(fnt(21, .heavy)).foregroundStyle(theme.ink1)
@@ -264,36 +329,29 @@ struct PDFOrganizePages: View {
                 PrimaryButton(label: "Done", height: 32) { editor.organizeOpen = false }
             }
             .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 4)
-            Text("Drag to reorder · tap a page to open it").font(fnt(12)).foregroundStyle(theme.ink4).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 4)
+            Text("Tap a page to select it, tap again to open · drag to reorder").font(fnt(12)).foregroundStyle(theme.ink4).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 4)
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 24)], spacing: 24) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 160), spacing: 24, alignment: .top)], alignment: .leading, spacing: 24) {
                     ForEach(0..<count, id: \.self) { i in
-                        VStack(spacing: 6) {
-                            ZStack(alignment: .bottom) {
-                                PDFPageThumb(editor: editor, index: i).frame(maxWidth: .infinity)
-                                HStack(spacing: 8) {
-                                    orgButton("rotate.right", tint: theme.ink2) { editor.mkRotatePage(i) }
-                                    orgButton("doc.on.doc", tint: theme.ink2) { editor.mkDuplicatePage(i) }
-                                    orgButton("trash", tint: theme.danger) { editor.mkDeletePage(i) }
+                        VStack(spacing: 8) {
+                            PDFPageThumb(editor: editor, index: i).frame(width: 160)
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(i == sel ? theme.accent : .clear, lineWidth: 2).padding(-3))
+                                .contentShape(Rectangle())
+                                .onTapGesture { if sel == i { editor.setPage(i); editor.organizeOpen = false } else { selected = i } }
+                                .draggable(String(i))
+                                .dropDestination(for: String.self) { items, _ in
+                                    guard let s = items.first, let from = Int(s) else { return false }
+                                    editor.mkMovePage(from: from, to: i)
+                                    return true
                                 }
-                                .padding(5).background(RoundedRectangle(cornerRadius: 7).fill(theme.popSolid).shadow(color: .black.opacity(0.18), radius: 2, y: 1)).padding(6)
+                            Text("Page \(i + 1)").font(fnt(12, .semibold)).foregroundStyle(theme.ink3)
+                            if i == sel {
+                                OrganizeActionPill(rotate: { editor.mkRotatePage(i) }, duplicate: { editor.mkDuplicatePage(i) }, delete: { editor.mkDeletePage(i); selected = nil })
                             }
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(i == editor.pageIndex ? theme.accent : .clear, lineWidth: 2.5).padding(-2))
-                            .contentShape(Rectangle())
-                            .onTapGesture { editor.setPage(i); editor.organizeOpen = false }
-                            .draggable(String(i))
-                            .dropDestination(for: String.self) { items, _ in
-                                guard let s = items.first, let from = Int(s) else { return false }
-                                editor.mkMovePage(from: from, to: i)
-                                return true
-                            }
-                            Text("Page \(i + 1)").font(fnt(11.5, .bold)).foregroundStyle(theme.ink4)
                         }
                     }
                     Button { editor.mkInsertBlankPage(after: count - 1) } label: {
-                        HStack(spacing: 7) { Image(systemName: "plus").font(fnt(13, .bold)); Text("Blank Page").font(fnt(13, .semibold)) }
-                            .foregroundStyle(theme.accent).frame(maxWidth: .infinity).aspectRatio(0.77, contentMode: .fit)
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+                        BlankPageTile(aspect: 0.77)
                     }.buttonStyle(.plain)
                 }
                 .padding(.horizontal, 24).padding(.vertical, 16)
@@ -301,9 +359,42 @@ struct PDFOrganizePages: View {
         }
         .background(theme.bg2)
     }
+}
 
-    private func orgButton(_ symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) { Image(systemName: symbol).font(fnt(13, .medium)).foregroundStyle(tint).frame(width: 30, height: 26) }.buttonStyle(.plain)
+/// Rotate · duplicate · delete, 36 tall, radius 10, `pop`.
+struct OrganizeActionPill: View {
+    @Environment(\.theme) private var theme
+    var rotate: () -> Void
+    var duplicate: () -> Void
+    var delete: () -> Void
+    var body: some View {
+        HStack(spacing: 4) {
+            btn("rotate.right", tint: theme.ink2, action: rotate)
+            btn("doc.on.doc", tint: theme.ink2, action: duplicate)
+            btn("trash", tint: theme.danger, action: delete)
+        }
+        .padding(.horizontal, 4).frame(height: 36)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.popSolid)
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(theme.line, lineWidth: 1))
+            .shadow(color: Shadows.pill.color, radius: Shadows.pill.radius, y: Shadows.pill.y))
+    }
+    private func btn(_ symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) { Image(systemName: symbol).font(fnt(14, .medium)).foregroundStyle(tint).frame(width: 36, height: 28) }.buttonStyle(.plain)
+    }
+}
+
+/// "Blank Page" tile: 160 wide at the page aspect, 1.5 pt dashed `line2`, radius 8, plus 22 accent, label 12/600.
+struct BlankPageTile: View {
+    @Environment(\.theme) private var theme
+    var aspect: CGFloat
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "plus").font(fnt(22, .medium)).foregroundStyle(theme.accent)
+            Text("Blank Page").font(fnt(12, .semibold)).foregroundStyle(theme.accent)
+        }
+        .frame(width: 160, height: (160 / aspect).rounded())
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
+        .contentShape(Rectangle())
     }
 }
 
@@ -314,7 +405,7 @@ struct PDFPageThumb: View {
     var body: some View {
         if let page = editor.mk.page(index) {
             let size = PDFService.displaySize(page)
-            let img = page.thumbnail(of: CGSize(width: 420, height: 420 * size.height / max(1, size.width)), for: .mediaBox)
+            let img = page.thumbnail(of: CGSize(width: 320, height: 320 * size.height / max(1, size.width)), for: .mediaBox)
             Image(uiImage: img).resizable().aspectRatio(size.width / max(1, size.height), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 6)).shadow(color: .black.opacity(0.15), radius: 3, y: 1)
         }
@@ -344,7 +435,7 @@ struct PDFFieldInspector: View {
                 labelled("Options (one per line)") {
                     TextField("", text: Binding(get: { (widget.choices ?? []).joined(separator: "\n") }, set: { widget.choices = $0.split(separator: "\n").map(String.init); editor.mkMarkDirty() }), axis: .vertical)
                         .lineLimit(3...6).font(fnt(12.5)).padding(.horizontal, 8).padding(.vertical, 6)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(theme.bg)).overlay(RoundedRectangle(cornerRadius: 7).stroke(theme.line, lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 7).fill(theme.field))
                 }
             }
             if widget.widgetFieldType == .button {
@@ -359,7 +450,7 @@ struct PDFFieldInspector: View {
         .frame(width: 262)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-            .shadow(color: Shadows.popover.color, radius: Shadows.popover.radius, y: Shadows.popover.y))
+            .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y))
     }
 
     private func labelled<C: View>(_ label: String, @ViewBuilder _ c: () -> C) -> some View {

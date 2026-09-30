@@ -6,8 +6,9 @@ annotation engine, one toolbar behaviour, one Style Popover and one set of colou
 - **Markups** — PDF annotation: Favorites / Draw / Annotate / Edit / Forms tabs, comments with
   authors, status and replies, form fields, organize pages. Import a PDF from Files (or open one
   with "Open in Redline"), or create a new PDF on blank, dot, grid or lined paper in four page colours.
-  The Markups library has Recents, Favorites, a folder tree (On My iPad › Redline) and a Browse Files…
-  entry that opens the system picker for iCloud Drive, OneDrive, Dropbox and other Files providers.
+  Home is a two-column file browser: the left column lists Markups (Recents, Favorites, the On My iPad ›
+  Redline folder tree, Browse Files… for iCloud Drive, OneDrive, Dropbox and other Files providers) plus
+  Drawings and Notes rows that expand to recent documents; the right pane shows Recents rails, a folder, or a gallery.
 - **Drawings** — layered plan sets: a Base layer plus trace layers with a white "veil", lock/hide,
   flatten down / flatten all.
 - **Notes** — paged notebooks: paper colours, templates, tags, single page or facing spread, and a
@@ -18,7 +19,8 @@ annotation engine, one toolbar behaviour, one Style Popover and one set of colou
 | Path | What |
 | --- | --- |
 | `Redline/` | Swift package `RedlineCore`: models, tool catalogue, style presets, palettes, stroke geometry, undo history, document operations, journal geometry, seed data, layout/theme tokens. No UI imports, so it builds and tests on any platform (`cd Redline && swift test`). |
-| `App/` | The SwiftUI app: home shelves, workspaces, canvas with Apple Pencil input, style popover, sidebars, settings, PDF export. Built only on macOS/CI. |
+| `App/` | The SwiftUI app: home browser, workspaces, canvas with Apple Pencil input, style popover, sidebars, settings, PDF export. Built only on macOS/CI. |
+| `design/` | `DESIGN-BRIEF.md` (what exists, tokens, settled interaction rules) and `handoff/` (the Claude Design return: change list, prototypes, screenshots). |
 | `project.yml` | XcodeGen spec. CI runs `xcodegen generate` to produce `Redline.xcodeproj`. |
 | `.github/workflows/build-ipa.yml` | Runs the core tests, then builds an unsigned IPA on every push to `main`. |
 
@@ -65,8 +67,11 @@ swift test
   XObject with the font embedded) through a small incremental-update writer, so every reader shows it identically.
 - Text boxes and callouts have a Font tab (any font on the device via the system font picker, including
   user-installed fonts; weight, size, colour); placing a sticky note opens its comment for typing.
-- Tapping an annotation (or its comment in the sidebar) opens a popup beside it with the comment, status, replies
-  and a Properties editor that restyles the annotation itself. Annotations with comment text show a small badge.
+- Selecting an annotation shows a selection bar (Comment · Delete · ×); the Comment button, a badge tap or a sticky
+  note opens the popup beside it: comment, status, replies (the reply field appears after tapping Reply) and a
+  Properties editor that restyles the annotation itself. Annotations with comment text or replies show a speech-bubble
+  badge in their own colour just above the ink; tapping it opens the popup. Sidebar rows expand in place to show the
+  full text, Edit / Delete and replies.
 - Markup and drawing pages stack in a native vertical scroll: free panning in any direction with rubber-band
   bounce (vertically always, horizontally when the page is wider than the view), finger pinch-zoom; the Pencil
   never scrolls. Zoomed-out pages are centred with the larger margins that leaves.

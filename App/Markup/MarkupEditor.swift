@@ -54,6 +54,11 @@ final class MarkupState {
     var annotationProps = false
     var focusComment = false
     var replyDraft = ""
+    /// Popup: the reply field shows only after tapping Reply.
+    var replyFieldOpen = false
+    /// Comments sidebar: the expanded row (stable id) and whether its text is being edited.
+    var expandedComment: String? = nil
+    var editingComment = false
     var undoStack: [PDFCommand] = []
     var redoStack: [PDFCommand] = []
     /// Bumped whenever the overlay must redraw (live stroke, selection, ruler…).
@@ -169,8 +174,9 @@ extension WorkspaceModel {
 
     func mkSelect(_ a: PDFAnnotation, on page: PDFPage) {
         mk.selected = mkGroup(of: a, on: page)
-        mk.annotationPopup = true
+        mk.annotationPopup = false
         mk.annotationProps = false
+        mk.replyFieldOpen = false
         mk.styleSnapshotTaken = false
         mk.replyDraft = ""
         mk.renderTick += 1
@@ -246,6 +252,16 @@ extension WorkspaceModel {
     func mkSetText(_ a: PDFAnnotation, _ text: String) {
         a.contents = text
         a.modificationDate = Date()
+        if a.redlineTool.isTextual, let page = a.page {
+            // Text boxes: the text is what's drawn, so refit the box and redraw its appearance.
+            let font = a.font ?? UIFont.systemFont(ofSize: 16)
+            let size = TextBoxRenderer.fittingSize(text: text.isEmpty ? " " : text, font: font)
+            let b = a.bounds
+            a.bounds = CGRect(x: b.minX, y: b.maxY - size.height, width: max(60, size.width), height: size.height)
+            a.dropAppearance()
+            if a.redlineTool == .callout { mkRelayoutLeader(for: a, on: page) }
+            mk.renderTick += 1
+        }
         mkMarkDirty()
     }
 
@@ -619,7 +635,7 @@ extension WorkspaceModel {
                     return rect?.contains(c) ?? false
                 }
                 mk.selected = hits.flatMap { mkGroup(of: $0, on: page) }
-                mk.annotationPopup = hits.count == 1
+                mk.annotationPopup = false
                 if !hits.isEmpty { app.flash("\(hits.count) selected") }
             } else {
                 mkClearSelection()
@@ -639,7 +655,13 @@ extension WorkspaceModel {
         case .rulerMove, .rulerRotate:
             break
         case .pan:
-            if !mkDragMoved, tool.info.isTap || tool.kind == .fill { mkTap(at: p, page: page) }
+            if !mkDragMoved {
+                if tool.info.isTap || tool.kind == .fill { mkTap(at: p, page: page) }
+                else if tool == .none {
+                    // Baseline: a clean tap selects the annotation under it (or clears the selection).
+                    if let a = page.annotation(at: p), !a.isLink, !a.isPopup { mkSelect(a, on: page) } else { mkClearSelection() }
+                }
+            }
         }
     }
 

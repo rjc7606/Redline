@@ -119,7 +119,7 @@ struct AnnotationPopup: View {
             .frame(width: width)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-                .shadow(color: Shadows.popover.color, radius: Shadows.popover.radius, y: Shadows.popover.y))
+                .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y))
             .offset(x: x, y: y)
             .popIn()
             .onAppear { if editor.annotationFocusComment { commentFocused = true; editor.annotationFocusComment = false } }

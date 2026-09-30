@@ -357,15 +357,13 @@ final class WorkspaceModel {
             if styleExpanded { styleTarget = .color }
         } else {
             app.styles.select(i, for: t)
-            // A different style starts a new annotation on the next stroke.
-            mk.activeInk = nil; mk.activeInkRoot = nil
-            session = nil
+            // Markups keep the pen chain open: a new colour becomes a grouped Ink annotation.
+            if !isPDF { session = nil }
         }
     }
 
     func updateStyle(_ body: (inout StylePreset) -> Void) {
         app.styles.update(styleTool, body)
-        mk.activeInk = nil; mk.activeInkRoot = nil
     }
 
     /// Pencil double-tap: eraser ⇄ the pen you were using (or previous tool, per the system setting).

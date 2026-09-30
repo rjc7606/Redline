@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>body{margin:0;background:#f2f2f7}a{color:#007AFF;text-decoration:none}a:hover{color:#007AFF;text-decoration:underline}</style>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css">
+<script src="icons.js"></script>
+</helmet>
+<div style="font-family:-apple-system,'SF Pro Text','Helvetica Neue',system-ui,sans-serif;color:#1c1c1e;padding:36px 44px 60px;max-width:1060px">
+  <div style="font-size:26px;font-weight:800">Redline — Symbol Sheet</div>
+  <div style="font-size:13.5px;color:#6d6d72;margin:6px 0 18px;max-width:680px;line-height:1.5">Tabler Icons (outline, 2 px stroke, round caps — the same grid our custom glyphs use), organized by toolbar tab. Fifteen tools keep a hand-drawn outline on Tabler's grid: the four pens (upright, tip-up close-ups so the nib shape reads at 20 px), shapes (so fill color shows through), line, double arrow and polyline, and bucket fill, text area and radio button, where the pack has no true match so their preset fill or border color can show through the glyph. Each card shows the icon at sheet size, then at the real 20 px toolbar size in its preset color and in the active state.</div>
+  <div style="display:inline-flex;background:#e4e2e8;border-radius:10px;padding:3px;gap:2px;margin-bottom:34px">
+    <span style="padding:6px 16px;border-radius:8px;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.12);font-size:13.5px;font-weight:700">★ Favorites</span>
+    <span style="padding:6px 16px;border-radius:8px;font-size:13.5px;font-weight:600;color:#3a3a3c">Draw</span>
+    <span style="padding:6px 16px;border-radius:8px;font-size:13.5px;font-weight:600;color:#3a3a3c">Annotate</span>
+    <span style="padding:6px 16px;border-radius:8px;font-size:13.5px;font-weight:600;color:#3a3a3c">Edit</span>
+    <span style="padding:6px 16px;border-radius:8px;font-size:13.5px;font-weight:600;color:#3a3a3c">Forms</span>
+  </div>
+  <sc-for list="{{ groups }}" as="g" hint-placeholder-count="5">
+    <div style="font-size:15px;font-weight:800;margin:0 0 4px">{{ g.name }}</div>
+    <div style="font-size:12px;color:#8e8e93;margin-bottom:12px">{{ g.sub }}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:34px">
+      <sc-for list="{{ g.items }}" as="it" hint-placeholder-count="8">
+        <div style="width:104px;display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 4px 12px;background:#fff;border-radius:10px;border:1px solid rgba(0,0,0,.07)">
+          <sc-if value="{{ it.hasFi }}" hint-placeholder-val="{{ true }}"><i class="ti ti-{{ it.fi }}" style="font-size:28px;line-height:1;display:block;height:28px;color:#1c1c1e"></i></sc-if>
+          <sc-if value="{{ it.noFi }}" hint-placeholder-val="{{ false }}"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#1c1c1e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ it.p1 }}" fill="{{ it.p1f }}" stroke="{{ it.p1s }}"></path><path d="{{ it.p2 }}"></path><path d="{{ it.pf }}" fill="#1c1c1e" stroke="none"></path></svg></sc-if>
+          <div style="display:flex;gap:6px">
+            <div style="width:34px;height:34px;border-radius:8px;background:rgba(0,0,0,.05);display:grid;place-items:center;color:{{ it.c }}">
+              <sc-if value="{{ it.hasFi }}" hint-placeholder-val="{{ true }}"><i class="ti ti-{{ it.fi }}" style="font-size:20px;line-height:1;display:block;height:20px"></i></sc-if>
+              <sc-if value="{{ it.noFi }}" hint-placeholder-val="{{ false }}"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ it.p1 }}" fill="{{ it.p1f }}" stroke="{{ it.p1s }}"></path><path d="{{ it.p2 }}"></path><path d="{{ it.pf }}" fill="currentColor" stroke="none"></path></svg></sc-if>
+            </div>
+            <div style="width:34px;height:34px;border-radius:8px;background:var(--accent,#007AFF);display:grid;place-items:center;color:#fff">
+              <sc-if value="{{ it.hasFi }}" hint-placeholder-val="{{ true }}"><i class="ti ti-{{ it.fi }}" style="font-size:20px;line-height:1;display:block;height:20px"></i></sc-if>
+              <sc-if value="{{ it.noFi }}" hint-placeholder-val="{{ false }}"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="{{ it.p1 }}"></path><path d="{{ it.p2 }}"></path><path d="{{ it.pf }}" fill="currentColor" stroke="none"></path></svg></sc-if>
+            </div>
+          </div>
+          <span style="font-size:10.5px;color:#3a3a3c;font-weight:600;text-align:center">{{ it.label }}</span>
+          <span style="font-size:9.5px;color:#8e8e93;font-family:ui-monospace,Menlo,monospace;text-align:center">{{ it.code }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </sc-for>
+  <div style="font-size:12px;color:#8e8e93;line-height:1.6;max-width:640px">Icons: <a href="https://tabler.io/icons" target="_blank" rel="noopener">Tabler Icons</a> — MIT licensed, no attribution required. Swap any icon by changing its name in <span style="font-family:ui-monospace,Menlo,monospace">icons.js</span>; the viewer and this sheet update together.</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  componentDidMount() { if (!window.REDLINE_ICONS) this.t = setTimeout(() => this.forceUpdate(), 250); }
+  componentWillUnmount() { clearTimeout(this.t); }
+  SVG = {
+    rect: { p1: 'M4 5.5h16v13H4z', p1f: 'rgba(255,59,48,.35)' }, ellipse: { p1: 'M3.5 12a8.5 6.5 0 1 0 17 0a8.5 6.5 0 1 0 -17 0', p1f: 'rgba(255,59,48,.35)' },
+    polygon: { p1: 'M12 3.5l8 6-3 10.5H7L4 9.5z', p1f: 'rgba(255,59,48,.35)' }, cloud: { p1: 'M6.5 15.5A4 4 0 0 1 7 7.6a5.2 5.2 0 0 1 10.2 1.3A3.4 3.4 0 0 1 16.8 15.5z', p1f: 'rgba(255,59,48,.35)' },
+    line: { p1: 'M4 20L20 4' }, dblarrow: { p1: 'M4 20L20 4M20 4l-5.5 1.2M20 4l-1.2 5.5M4 20l5.5-1.2M4 20l1.2-5.5' }, polyline: { p1: 'M3.5 18.5l5-9 5 4.5 7-10', pf: 'M2.1 18.5a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0M7.1 9.5a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0M12.1 14a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0M19.1 4a1.4 1.4 0 1 0 2.8 0a1.4 1.4 0 1 0 -2.8 0' },
+    pen: { p1: 'M6.5 12.5h11v9h-11z', p2: 'M6.5 12.5L10 4.5h4L17.5 12.5', pf: 'M10.5 3.5a1.5 1.5 0 1 0 3 0a1.5 1.5 0 1 0 -3 0' }, fineliner: { p1: 'M7 13h10v8.5H7z', p2: 'M7 13c0-3.4 2.1-5 5-5s5 1.6 5 5M10.5 8V5.5h3V8M12 5.5v-3' }, felt: { p1: 'M7 13h10v8.5H7z', p2: 'M7.5 13v-3h9v3M9.5 10V7l2.5-3.5L14.5 7v3' }, marker: { p1: 'M6 13h12v8.5H6z', p2: 'M6.5 13v-2.5h11V13M8.5 10.5V5l7-3v8.5' },
+    fill: { p1: 'M18.5 11.5L11 4l-7.6 7.6a1.8 1.8 0 0 0 0 2.5l4.5 4.5a1.8 1.8 0 0 0 2.5 0z', p2: 'M5.5 2.5L11 8M2.5 12.5h15', pf: 'M21.5 19.5a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4z' },
+    farea: { p1: 'M6 4.5h12a2.5 2.5 0 0 1 2.5 2.5v10a2.5 2.5 0 0 1-2.5 2.5H6a2.5 2.5 0 0 1-2.5-2.5V7A2.5 2.5 0 0 1 6 4.5z', p2: 'M7 9h10M7 12.5h7M17.5 17l2-2' }, fradio: { p1: 'M3.5 12a8.5 8.5 0 1 0 17 0a8.5 8.5 0 1 0 -17 0', pf: 'M8.5 12a3.5 3.5 0 1 0 7 0a3.5 3.5 0 1 0 -7 0' },
+    textbox: { p1: 'M3.5 5h17v14h-17z', p2: 'M8 8.5h8M8 8.5v1.8M16 8.5v1.8M12 8.5v7M10.3 15.5h3.4', p1s: '#FF3B30', p1f: '#fff' }
+  };
+  renderVals() {
+    const I = window.REDLINE_ICONS || {};
+    const C = { pen: '#1c1c1e', fineliner: '#007AFF', felt: '#34C759', marker: '#FF9500', fill: '#FFCC00', highlighter: '#FFCC00', note: '#FFCC00', check: '#34C759', xmark: '#FF3B30', signature: '#1c1c1e', textbox: '#FF3B30', rect: '#FF3B30', ellipse: '#FF3B30', polygon: '#FF3B30', cloud: '#FF3B30', line: '#FF3B30', arrow: '#FF3B30', dblarrow: '#FF3B30', polyline: '#FF3B30', underline: '#FF3B30', strike: '#FF3B30', squiggly: '#FF3B30', callout: '#FF3B30' };
+    const mk = (id, label) => { const fi = (I[id] || {}).fi || ''; const s = this.SVG[id] || {};
+      return { label, fi, hasFi: !!fi, noFi: !fi, code: fi ? 'ti-' + fi : 'custom svg', c: C[id] || '#3a3a3c', p1: s.p1 || '', p2: s.p2 || '', pf: s.pf || '', p1f: s.p1f || 'none', p1s: s.p1s || 'currentColor' }; };
+    const G = (name, sub, list) => ({ name, sub, items: list.map(([id, l]) => mk(id, l)) });
+    return { groups: [
+      G('Draw tab', 'Pens, fill, eraser, shapes, clouds, measure (icons only)', [['pen', 'Rollerball'], ['fineliner', 'Fineliner'], ['felt', 'Felt tip'], ['marker', 'Marker'], ['fill', 'Bucket fill'], ['eraser', 'Eraser'], ['rect', 'Rectangle'], ['ellipse', 'Ellipse'], ['line', 'Line'], ['arrow', 'Arrow'], ['dblarrow', 'Double arrow'], ['polyline', 'Polyline'], ['polygon', 'Polygon'], ['check', 'Check mark'], ['xmark', 'X mark'], ['cloud', 'Revision cloud'], ['distance', 'Distance'], ['perimeter', 'Perimeter'], ['area', 'Area'], ['calibrate', 'Calibrate']]),
+      G('Annotate tab', 'Selection, text markup, notes, stamps, signature', [['select', 'Select'], ['lasso', 'Lasso'], ['highlighter', 'Highlighter'], ['underline', 'Underline'], ['strike', 'Strikethrough'], ['squiggly', 'Squiggly'], ['textbox', 'Text box'], ['note', 'Sticky note'], ['callout', 'Callout'], ['stamps', 'Stamps'], ['signature', 'Signature'], ['datestamp', 'Date stamp'], ['initials', 'Initials']]),
+      G('Edit tab', 'Content and page operations', [['edittext', 'Edit text'], ['image', 'Insert image'], ['link', 'Link'], ['redact', 'Redact'], ['rotatepg', 'Rotate page'], ['crop', 'Crop']]),
+      G('Forms tab', 'Fillable form field builder', [['ftext', 'Text input'], ['farea', 'Text area'], ['fcheck', 'Checkbox'], ['fradio', 'Radio button'], ['fdrop', 'Dropdown'], ['fdate', 'Date field'], ['fsig', 'Signature field'], ['ftoggle', 'Toggle']]),
+      G('Organize Pages', 'Page operations live in the Organize Pages view', [['insertpg', 'Insert page'], ['duplicatepg', 'Duplicate'], ['deletepg', 'Delete page'], ['extract', 'Extract'], ['append', 'Append PDF'], ['reorder', 'Reorder']]),
+      G('Global chrome', 'Always visible, outside the tabs', [['ruler', 'Ruler'], ['undo', 'Undo'], ['redo', 'Redo'], ['zoomin', 'Zoom in'], ['zoomout', 'Zoom out'], ['share', 'Share'], ['search', 'Search']])
+    ] };
+  }
+}
+</script>
+</body>
+</html>

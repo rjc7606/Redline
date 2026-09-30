@@ -29,6 +29,7 @@ struct SegmentControl<T: Hashable>: View {
                     Text(o.label)
                 }
                 .font(fnt(fontSize, .semibold))
+                .lineLimit(1).minimumScaleFactor(0.85)
                 .foregroundStyle(on ? theme.ink1 : theme.ink3)
                 .padding(.vertical, vPad)
                 .padding(.horizontal, hPad)
@@ -86,17 +87,19 @@ struct PrimaryButton: View {
     var label: String
     var symbol: String? = nil
     var height: Double = 36
+    /// Fill colour (accent by default; tool colour on library "New" buttons).
+    var tint: Color? = nil
     var action: () -> Void
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
                 if let s = symbol { Image(systemName: s).font(fnt(14, .semibold)) }
-                Text(label).font(fnt(13.5, .bold))
+                Text(label).font(fnt(height >= 36 ? 14 : 13, .semibold)).lineLimit(1)
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 14)
             .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.accent))
+            .background(RoundedRectangle(cornerRadius: height >= 36 ? 9 : 8, style: .continuous).fill(tint ?? theme.accent))
         }
         .buttonStyle(.plain)
     }
@@ -107,18 +110,22 @@ struct SecondaryButton: View {
     var label: String
     var symbol: String? = nil
     var tint: Color? = nil
-    var height: Double = 34
+    var height: Double = 36
+    /// Optional trailing chevron (rotates 180° when `open`).
+    var chevron: Bool = false
+    var open: Bool = false
     var action: () -> Void
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let s = symbol { Image(systemName: s).font(fnt(14, .semibold)) }
-                if !label.isEmpty { Text(label).font(fnt(13, .semibold)) }
+                if !label.isEmpty { Text(label).font(fnt(height >= 36 ? 14 : 13, .semibold)).lineLimit(1) }
+                if chevron { Image(systemName: "chevron.down").font(fnt(10, .bold)).rotationEffect(.degrees(open ? 180 : 0)) }
             }
-            .foregroundStyle(tint ?? theme.ink2)
+            .foregroundStyle(tint ?? theme.ink1)
             .padding(.horizontal, label.isEmpty ? 0 : 12)
             .frame(minWidth: height, minHeight: height, maxHeight: height)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.bg3))
+            .background(RoundedRectangle(cornerRadius: height >= 36 ? 9 : 8, style: .continuous).fill(theme.bg3))
         }
         .buttonStyle(.plain)
     }
@@ -150,31 +157,46 @@ struct PopoverCard<Content: View>: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(theme.popSolid)
                     .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-                    .shadow(color: Shadows.popover.color, radius: Shadows.popover.radius, y: Shadows.popover.y)
+                    .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y)
             )
     }
 }
 
-/// Sidebar/nav row.
+/// Sidebar/nav row (handoff v2): 36 tall, radius 9, 14/500 `ink2`; selected `hov2` bg, 14/600 `ink1`, glyph `accent`.
 struct NavRow: View {
     @Environment(\.theme) private var theme
     var label: String
-    var symbol: String
+    var symbol: String? = nil
     var active: Bool = false
     var trailing: String? = nil
+    /// Extra left inset (tree levels).
+    var indent: Double = 0
+    /// 8 pt colour dot instead of a symbol (tool rows).
+    var dot: Color? = nil
+    /// 14 × 18 cover swatch instead of a symbol (notebooks).
+    var swatch: Color? = nil
     var action: () -> Void
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: symbol).font(fnt(17, .medium)).frame(width: 20)
-                Text(label).font(fnt(15, active ? .semibold : .regular))
+                Group {
+                    if let d = dot { Circle().fill(d).frame(width: 8, height: 8) }
+                    else if let sw = swatch {
+                        RoundedRectangle(cornerRadius: 2).fill(sw).frame(width: 14, height: 18)
+                            .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.black.opacity(0.12), lineWidth: 1))
+                    } else if let s = symbol {
+                        Image(systemName: s).font(fnt(18, .medium)).foregroundStyle(active ? theme.accent : theme.ink3)
+                    }
+                }
+                .frame(width: 20)
+                Text(label).font(fnt(14, active ? .semibold : .medium)).foregroundStyle(active ? theme.ink1 : theme.ink2).lineLimit(1)
                 Spacer(minLength: 0)
-                if let t = trailing { Text(t).font(fnt(12, .semibold)).foregroundStyle(theme.ink4) }
+                if let t = trailing { Text(t).font(fnt(11.5, .medium)).foregroundStyle(theme.ink4) }
             }
-            .foregroundStyle(active ? theme.accent : theme.ink2)
-            .padding(.vertical, 8)
-            .padding(.horizontal, 10)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(active ? theme.accentSoft : .clear))
+            .padding(.leading, 10 + indent)
+            .padding(.trailing, 10)
+            .frame(height: 36)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(active ? theme.hov2 : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -242,8 +264,21 @@ struct FieldText: View {
             .foregroundStyle(theme.ink1)
             .padding(.horizontal, 12)
             .frame(height: height)
-            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.card))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(theme.line, lineWidth: 1))
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
+    }
+}
+
+/// Status chip (handoff v2): amber for Open, green otherwise.
+struct StatusChip: View {
+    @Environment(\.theme) private var theme
+    var status: CommentStatus
+    /// 22 (popup) or 18 (sidebar rows).
+    var height: Double = 22
+    var body: some View {
+        let c = theme.chip(for: status)
+        Text(status.rawValue).font(fnt(height >= 22 ? 11 : 10, .bold)).foregroundStyle(c.fg)
+            .padding(.horizontal, height >= 22 ? 8 : 6).frame(height: height)
+            .background(RoundedRectangle(cornerRadius: height >= 22 ? 6 : 5, style: .continuous).fill(c.bg))
     }
 }
 

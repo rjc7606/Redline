@@ -5,178 +5,38 @@ import RedlineCore
 extension DocumentType {
     /// Colour that identifies the tool on the home screen.
     var tint: Color { Color(hex: modeChipHex.fg) }
-    var blurb: String {
-        switch self {
-        case .markup: "PDFs with comments any reader can open. Every mark carries an author and a time."
-        case .drawing: "Multi-page plan sets with trace-paper layers you can veil, lock and flatten."
-        case .journal: "Paged notebooks with paper, templates, tags and a calendar."
-        }
-    }
     var singular: String {
-        switch self { case .markup: "markup"; case .drawing: "plan set"; case .journal: "notebook" }
+        switch self { case .markup: "markup"; case .drawing: "drawing"; case .journal: "notebook" }
+    }
+    /// Rail title on the Home "Recents" pane.
+    var railLabel: String {
+        switch self { case .markup: "Recent markups"; case .drawing: "Recent drawings"; case .journal: "Recent notebooks" }
     }
 }
 
 enum HomeSort: String, CaseIterable { case recent = "Recent", name = "Name" }
 
-/// Home: an overview of the three tools, each with its own recents rail, or one tool's full library.
+/// Home (handoff v2): a two-column file browser. The left column lists every tool's places; the right pane shows
+/// the Recents rails, a Markups folder, or a Drawings / Notes gallery.
 struct HomeView: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
 
     var body: some View {
-        Group {
-            if let shelf = app.homeShelf {
-                Group {
-                    if shelf == .markup { MarkupLibrary() } else { ShelfLibrary(shelf: shelf) }
-                }
-                .transition(.move(edge: .trailing).combined(with: .opacity))
-            } else {
-                HomeOverview()
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+        HomeBrowser()
+            .sheet(isPresented: Binding(get: { app.newDraft != nil }, set: { if !$0 { app.newDraft = nil } })) {
+                NewDocumentSheet()
             }
-        }
-        .animation(.easeInOut(duration: 0.22), value: app.homeShelf)
-        .sheet(isPresented: Binding(get: { app.newDraft != nil }, set: { if !$0 { app.newDraft = nil } })) {
-            NewDocumentSheet()
-        }
-        .alert("Delete document?", isPresented: Binding(get: { app.pendingDelete != nil }, set: { if !$0 { app.pendingDelete = nil } })) {
-            Button("Delete", role: .destructive) { if let id = app.pendingDelete { app.deleteDocument(id) }; app.pendingDelete = nil }
-            Button("Cancel", role: .cancel) { app.pendingDelete = nil }
-        } message: {
-            Text("\"\(app.pendingDelete.flatMap { app.store.document($0)?.name } ?? "")\" will be removed from this iPad.")
-        }
+            .alert("Delete document?", isPresented: Binding(get: { app.pendingDelete != nil }, set: { if !$0 { app.pendingDelete = nil } })) {
+                Button("Delete", role: .destructive) { if let id = app.pendingDelete { app.deleteDocument(id) }; app.pendingDelete = nil }
+                Button("Cancel", role: .cancel) { app.pendingDelete = nil }
+            } message: {
+                Text("\"\(app.pendingDelete.flatMap { app.store.document($0)?.name } ?? "")\" will be removed from this iPad.")
+            }
     }
 }
 
-// MARK: - Overview (three tool shelves)
-
-struct HomeOverview: View {
-    @Environment(\.theme) private var theme
-    @Environment(AppModel.self) private var app
-
-    var body: some View {
-        @Bindable var app = app
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                HStack(spacing: 12) {
-                    Text("Redline").font(fnt(30, .heavy)).foregroundStyle(theme.ink1)
-                    Spacer()
-                    SearchField(text: $app.homeQuery).frame(maxWidth: 320)
-                    BarButton(symbol: "gearshape", label: "Settings") { app.openSettings() }
-                }
-                ForEach(DocumentType.allCases, id: \.self) { t in
-                    ToolShelf(type: t, query: app.homeQuery)
-                }
-            }
-            .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 40)
-        }
-        .background(theme.bg)
-    }
-}
-
-/// One tool's band: identity header, New button, and a horizontal rail of recent documents.
-struct ToolShelf: View {
-    @Environment(\.theme) private var theme
-    @Environment(AppModel.self) private var app
-    var type: DocumentType
-    var query: String
-
-    var body: some View {
-        let all = app.store.documents(on: type)
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        let docs = q.isEmpty ? Array(all.prefix(12)) : all.filter { $0.name.lowercased().contains(q) }
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 14) {
-                Button { open() } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: type.symbol)
-                            .font(fnt(21, .semibold)).foregroundStyle(type.tint)
-                            .frame(width: 46, height: 46)
-                            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(type.tint.opacity(0.14)))
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 8) {
-                                Text(type.shelfLabel).font(fnt(22, .bold)).foregroundStyle(theme.ink1)
-                                Text("\(all.count)").font(fnt(12, .bold)).foregroundStyle(theme.ink4)
-                                    .padding(.horizontal, 7).padding(.vertical, 2).background(Capsule().fill(theme.hov))
-                                Image(systemName: "chevron.right").font(fnt(13, .semibold)).foregroundStyle(theme.ink4)
-                            }
-                            Text(type.blurb).font(fnt(12.5)).foregroundStyle(theme.ink3).lineLimit(2)
-                        }
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                Spacer(minLength: 8)
-                Button { app.settings.shelf = type; app.newDraft = NewDocumentDraft(type: type) } label: {
-                    HStack(spacing: 7) { Image(systemName: "plus").font(fnt(14, .bold)); Text("New").font(fnt(13.5, .bold)) }
-                        .foregroundStyle(.white).padding(.horizontal, 14).frame(height: 36)
-                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(type.tint))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(type.newLabel)
-            }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 18) {
-                    ForEach(docs) { d in
-                        DocTile(doc: d).frame(width: type == .journal ? 150 : 190)
-                    }
-                    if docs.isEmpty {
-                        EmptyShelfCard(type: type, searching: !q.isEmpty) { app.settings.shelf = type; app.newDraft = NewDocumentDraft(type: type) }
-                    } else if q.isEmpty && all.count > docs.count {
-                        Button { open() } label: {
-                            VStack(spacing: 8) {
-                                Image(systemName: "square.grid.2x2").font(fnt(22, .medium))
-                                Text("See all \(all.count)").font(fnt(13, .bold))
-                            }
-                            .foregroundStyle(type.tint)
-                            .frame(width: 150).aspectRatio(type == .journal ? 0.78 : 1.32, contentMode: .fit)
-                            .background(RoundedRectangle(cornerRadius: 8).fill(type.tint.opacity(0.08)))
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(type.tint.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 2).padding(.vertical, 4)
-            }
-        }
-        .padding(18)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(theme.line, lineWidth: 1))
-        .overlay(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 3).fill(type.tint).frame(width: 5).padding(.vertical, 18).offset(x: -1)
-        }
-    }
-
-    private func open() {
-        app.settings.shelf = type
-        app.homeSort = .recent
-        app.homeShelf = type
-    }
-}
-
-struct EmptyShelfCard: View {
-    @Environment(\.theme) private var theme
-    var type: DocumentType
-    var searching: Bool
-    var action: () -> Void
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: searching ? "magnifyingglass" : "plus").font(fnt(22, .medium))
-                Text(searching ? "No matches" : "Create your first \(type.singular)").font(fnt(13, .bold)).multilineTextAlignment(.center)
-            }
-            .foregroundStyle(searching ? theme.ink4 : type.tint)
-            .frame(width: 190).aspectRatio(1.32, contentMode: .fit)
-            .background(RoundedRectangle(cornerRadius: 8).fill(theme.bg))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
-        }
-        .buttonStyle(.plain)
-        .disabled(searching)
-    }
-}
-
-/// Rounded search field with a magnifier.
+/// Rounded search field with a magnifier (34 tall, radius 9, `field` background).
 struct SearchField: View {
     @Environment(\.theme) private var theme
     @Binding var text: String
@@ -188,59 +48,15 @@ struct SearchField: View {
                 Button { text = "" } label: { Image(systemName: "xmark.circle.fill").font(fnt(14)).foregroundStyle(theme.ink4) }.buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12).frame(height: 36)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.bg3))
+        .padding(.horizontal, 12).frame(height: 34)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
     }
 }
 
-// MARK: - One tool's full library
+// MARK: - Document tile
 
-struct ShelfLibrary: View {
-    @Environment(\.theme) private var theme
-    @Environment(AppModel.self) private var app
-    var shelf: DocumentType
-
-    var body: some View {
-        @Bindable var app = app
-        let q = app.homeQuery.trimmingCharacters(in: .whitespaces).lowercased()
-        var docs = app.store.documents(on: shelf).filter { q.isEmpty || $0.name.lowercased().contains(q) }
-        if app.homeSort == .name { docs.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending } }
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                HStack(spacing: 12) {
-                    Button { app.homeShelf = nil } label: {
-                        HStack(spacing: 2) { Image(systemName: "chevron.left").font(fnt(17, .semibold)); Text("Home").font(fnt(15)) }
-                            .foregroundStyle(theme.accent)
-                    }.buttonStyle(.plain)
-                    Image(systemName: shelf.symbol).font(fnt(19, .semibold)).foregroundStyle(shelf.tint)
-                        .frame(width: 40, height: 40)
-                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(shelf.tint.opacity(0.14)))
-                    Text(shelf.shelfLabel).font(fnt(30, .heavy)).foregroundStyle(theme.ink1)
-                    Spacer()
-                    SearchField(text: $app.homeQuery).frame(maxWidth: 260)
-                    SegmentControl(options: HomeSort.allCases.map { SegmentOption(value: $0, label: $0.rawValue) }, selection: $app.homeSort, fontSize: 12.5, vPad: 6, hPad: 12)
-                    Button { app.settings.shelf = shelf; app.newDraft = NewDocumentDraft(type: shelf) } label: {
-                        HStack(spacing: 7) { Image(systemName: "plus").font(fnt(14, .bold)); Text(shelf.newLabel).font(fnt(13.5, .bold)) }
-                            .foregroundStyle(.white).padding(.horizontal, 14).frame(height: 36)
-                            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(shelf.tint))
-                    }.buttonStyle(.plain)
-                    BarButton(symbol: "gearshape", label: "Settings") { app.openSettings() }
-                }
-                if docs.isEmpty {
-                    Text(q.isEmpty ? "Nothing here yet." : "No \(shelf.shelfLabel.lowercased()) match \"\(app.homeQuery)\".")
-                        .font(fnt(14)).foregroundStyle(theme.ink4).frame(maxWidth: .infinity).padding(.vertical, 60)
-                } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: shelf == .journal ? 150 : 190), spacing: 22)], spacing: 26) {
-                        ForEach(docs) { d in DocTile(doc: d) }
-                    }
-                }
-            }
-            .padding(.horizontal, 28).padding(.top, 22).padding(.bottom, 40)
-        }
-        .background(theme.bg)
-    }
-}
-
+/// Library tile (handoff v2): 132-wide page thumbnail at the page's aspect (notebooks: 104 × 140 cover),
+/// name 13/600, meta 11.5/500. No badges on the face; delete lives in the context menu.
 struct DocTile<Extra: View>: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
@@ -251,30 +67,21 @@ struct DocTile<Extra: View>: View {
     @ViewBuilder var extra: () -> Extra
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            ZStack(alignment: .topTrailing) {
-                thumbnail
-                Button { app.pendingDelete = doc.id } label: {
-                    Image(systemName: "xmark").font(fnt(11, .heavy)).foregroundStyle(theme.ink4).frame(width: 22, height: 22)
-                        .background(Circle().fill(Color.white.opacity(0.85)))
-                }.buttonStyle(.plain).padding(6).opacity(0.5)
-            }
-            .aspectRatio(tileAspect, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.14), radius: 2, y: 1)
+        VStack(alignment: .leading, spacing: 8) {
+            face
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     if doc.isFavorite { Image(systemName: "star.fill").font(fnt(10)).foregroundStyle(Color(hex: "#FF9500")) }
-                    Text(doc.name).font(fnt(13.5, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+                    Text(doc.name).font(fnt(13, .semibold)).foregroundStyle(theme.ink1).lineLimit(1).truncationMode(.middle)
                 }
-                Text(Formatting.tileMeta(pages: doc.pages.count, modified: doc.modified)).font(fnt(11.5)).foregroundStyle(theme.ink4)
+                Text(meta).font(fnt(11.5, .medium)).foregroundStyle(theme.ink4).lineLimit(1)
                 if showFolder {
                     Text("Redline" + (doc.folderPath.isEmpty ? "" : " › " + doc.folderPath.replacingOccurrences(of: "/", with: " › ")))
                         .font(fnt(11)).foregroundStyle(theme.ink4).lineLimit(1)
                 }
             }
         }
+        .frame(width: tileWidth, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.openDocument(doc.id) }
         .contextMenu {
@@ -284,55 +91,59 @@ struct DocTile<Extra: View>: View {
         }
     }
 
-    /// Markup tiles take the shape of the document's first page.
-    private var tileAspect: CGFloat {
+    private var tileWidth: CGFloat { doc.type == .journal ? Metrics.notebookTile.w : Metrics.docTile }
+
+    private var meta: String {
+        let ago = Formatting.ago(doc.modified)
         switch doc.type {
-        case .journal: 0.78
-        case .drawing: 1.32
-        case .markup: CGFloat(max(0.5, min(2.0, doc.canvasSize.w / doc.canvasSize.h)))
+        case .markup: return Formatting.plural(doc.pages.count, "page") + " · " + ago
+        case .drawing: return Formatting.plural(doc.pages.count, "page") + " · " + Formatting.plural(doc.layerCount, "layer") + " · " + ago
+        case .journal: return Formatting.plural(max(0, doc.pages.count - 1), "page") + " · " + Formatting.plural(doc.tagCounts().count, "tag") + " · " + ago
         }
     }
 
+    /// Markup and drawing tiles take the shape of the first page.
+    private var pageAspect: CGFloat { CGFloat(max(0.5, min(2.0, doc.canvasSize.w / doc.canvasSize.h))) }
+
     @ViewBuilder
-    private var thumbnail: some View {
+    private var face: some View {
         switch doc.type {
         case .markup:
-            ZStack(alignment: .bottomLeading) {
-                Color.white
-                DocumentThumbnail(doc: doc)
-                badge("doc.text", Formatting.plural(doc.pages.count, "page"))
-                Text("PDF").font(fnt(9, .heavy)).tracking(0.5).foregroundStyle(.white).padding(.horizontal, 5).padding(.vertical, 2)
-                    .background(RoundedRectangle(cornerRadius: 3).fill(Color(hex: "#e8483f")))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing).padding(8)
-            }
+            ZStack { Color.white; DocumentThumbnail(doc: doc) }
+                .frame(width: Metrics.docTile, height: (Metrics.docTile / pageAspect).rounded())
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(theme.line, lineWidth: 1))
+                .shadow(color: Shadows.pill.color, radius: Shadows.pill.radius, y: Shadows.pill.y)
         case .drawing:
-            ZStack(alignment: .bottomLeading) {
-                theme.bg3
-                RoundedRectangle(cornerRadius: 3).fill(Color.white).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(hex: "#c9c9cf"))).padding(EdgeInsets(top: 18, leading: 18, bottom: 18, trailing: 30))
-                RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.75)).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(hex: "#c9c9cf"))).padding(EdgeInsets(top: 12, leading: 24, bottom: 24, trailing: 24))
-                RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.6)).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color(hex: "#c9c9cf")))
-                    .overlay(GlyphView(d: "M14 44V16h30v28zM44 30h22M66 16v28", size: 90, color: Color(hex: "#e8483f")).scaleEffect(0.7))
-                    .padding(EdgeInsets(top: 6, leading: 30, bottom: 30, trailing: 18))
-                badge("square.stack", Formatting.plural(doc.layerCount, "layer"))
+            // Page stack: three sheets offset 3 pt, the front one rendered.
+            let w = Metrics.docTile - 6, h = ((Metrics.docTile - 6) / pageAspect).rounded()
+            ZStack(alignment: .topLeading) {
+                ForEach([2, 1], id: \.self) { i in
+                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(theme.card)
+                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(theme.line, lineWidth: 1))
+                        .frame(width: w, height: h).offset(x: CGFloat(i) * 3, y: CGFloat(i) * 3)
+                }
+                ZStack { Color.white; DocumentThumbnail(doc: doc) }
+                    .frame(width: w, height: h)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(theme.line, lineWidth: 1))
             }
+            .frame(width: Metrics.docTile, height: h + 6, alignment: .topLeading)
+            .shadow(color: Shadows.pill.color, radius: Shadows.pill.radius, y: Shadows.pill.y)
         case .journal:
             let paper = doc.pages.first?.paper ?? .cream
             let fg = paper.isDark ? Color(hex: "#f2f2f7") : Color(hex: "#1c1c1e")
+            let shape = UnevenRoundedRectangle(topLeadingRadius: 6, bottomLeadingRadius: 6, bottomTrailingRadius: 10, topTrailingRadius: 10, style: .continuous)
             ZStack(alignment: .topLeading) {
                 Color(hex: paper.hex)
-                Rectangle().fill(Color.black.opacity(0.18)).frame(width: 14).frame(maxHeight: .infinity)
-                Text(doc.name).font(fnt(14, .heavy)).foregroundStyle(fg).lineLimit(3).padding(.leading, 26).padding(.trailing, 14).padding(.top, 22)
-                HStack(spacing: 4) { Image(systemName: "tag").font(fnt(10)); Text(Formatting.plural(doc.tagCounts().count, "tag")).font(fnt(10, .semibold)) }
-                    .foregroundStyle(fg.opacity(0.75)).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading).padding(.leading, 26).padding(.bottom, 12)
+                Rectangle().fill(Color.black.opacity(0.12)).frame(width: 4)
+                Text(doc.name).font(fnt(12, .bold)).foregroundStyle(fg).lineLimit(3).padding(.leading, 14).padding(.trailing, 10).padding(.top, 18)
             }
+            .frame(width: Metrics.notebookTile.w, height: Metrics.notebookTile.h)
+            .clipShape(shape)
+            .overlay(shape.stroke(theme.line, lineWidth: 1))
+            .shadow(color: Shadows.pill.color, radius: Shadows.pill.radius, y: Shadows.pill.y)
         }
-    }
-
-    private func badge(_ symbol: String, _ text: String) -> some View {
-        HStack(spacing: 4) { Image(systemName: symbol).font(fnt(10)); Text(text).font(fnt(10, .bold)) }
-            .foregroundStyle(Color(hex: "#6d6d72")).padding(.horizontal, 6).padding(.vertical, 2)
-            .background(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(0.9)))
-            .padding(8)
     }
 }
 
@@ -378,7 +189,7 @@ struct NewDocumentSheet: View {
                     }
                     if draft.pdfFile == nil {
                         HStack(alignment: .top, spacing: 22) {
-                            // Live model of the page: paper, colour and orientation.
+                            // Live model of the page: paper, colour and orientation (max height 260 so the sheet fits 11" portrait).
                             VStack(spacing: 8) {
                                 TemplateSwatch(template: draft.template, paper: draft.paper)
                                     .aspectRatio(draft.landscape ? 1.294 : 0.773, contentMode: .fit)
@@ -399,8 +210,8 @@ struct NewDocumentSheet: View {
                                             VStack(spacing: 5) {
                                                 TemplateSwatch(template: t, paper: draft.paper)
                                                     .frame(width: 44, height: 56)
-                                                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                                                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(on ? theme.accent : theme.line, lineWidth: on ? 2 : 1))
+                                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                                    .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(on ? theme.accent : theme.line, lineWidth: on ? 2 : 1))
                                                 Text(t.label).font(fnt(11, .semibold)).foregroundStyle(on ? theme.accent : theme.ink2)
                                             }
                                             .contentShape(Rectangle())
@@ -412,9 +223,9 @@ struct NewDocumentSheet: View {
                                     SectionLabel(text: "Color")
                                     HStack(spacing: 10) {
                                         ForEach(Paper.pagePresets, id: \.self) { p in
-                                            Circle().fill(Color(hex: p.hex)).frame(width: 34, height: 34)
+                                            Circle().fill(Color(hex: p.hex)).frame(width: 36, height: 36)
                                                 .overlay(Circle().stroke(theme.line2, lineWidth: 1))
-                                                .overlay(Circle().stroke(theme.accent, lineWidth: draft.paper == p ? 2.5 : 0).padding(-4))
+                                                .overlay(Circle().stroke(theme.accent, lineWidth: draft.paper == p ? 2 : 0).padding(-4))
                                                 .onTapGesture { app.newDraft?.paper = p }
                                                 .accessibilityLabel(p.label)
                                         }
@@ -438,10 +249,9 @@ struct NewDocumentSheet: View {
                                 VStack(spacing: 6) {
                                     TemplateSwatch(template: t, paper: draft.paper)
                                         .aspectRatio(0.78, contentMode: .fit)
-                                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(on ? theme.accent : theme.line, lineWidth: 1.5))
-                                        .shadow(color: on ? theme.accent.opacity(0.25) : .clear, radius: 0, x: 0, y: 0)
-                                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.accent.opacity(on ? 0.25 : 0), lineWidth: 6).padding(-3))
+                                        .frame(maxHeight: 120)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(on ? theme.accent : theme.line, lineWidth: on ? 2 : 1))
                                     Text(t.label).font(fnt(12, .semibold)).foregroundStyle(on ? theme.accent : theme.ink2)
                                 }
                                 .contentShape(Rectangle())
@@ -454,8 +264,8 @@ struct NewDocumentSheet: View {
                         HStack(spacing: 10) {
                             ForEach(Paper.allCases, id: \.self) { p in
                                 Circle().fill(Color(hex: p.hex)).frame(width: 36, height: 36)
-                                    .overlay(Circle().stroke(theme.line, lineWidth: 1))
-                                    .overlay(Circle().stroke(theme.accent.opacity(draft.paper == p ? 0.35 : 0), lineWidth: 3).padding(-3))
+                                    .overlay(Circle().stroke(theme.line2, lineWidth: 1))
+                                    .overlay(Circle().stroke(theme.accent, lineWidth: draft.paper == p ? 2 : 0).padding(-4))
                                     .onTapGesture { app.newDraft?.paper = p }
                                     .accessibilityLabel(p.label)
                             }
@@ -464,13 +274,13 @@ struct NewDocumentSheet: View {
                 }
                 HStack(spacing: 8) {
                     Spacer()
-                    SecondaryButton(label: "Cancel", height: 36) { app.newDraft = nil }
-                    PrimaryButton(label: "Create") { app.createFromDraft() }
+                    SecondaryButton(label: "Cancel") { app.newDraft = nil }
+                    PrimaryButton(label: "Create", tint: draft.type.tint) { app.createFromDraft() }
                 }
             }
             .padding(.horizontal, 24).padding(.vertical, 22)
             .frame(maxWidth: Metrics.modalWidth)
-            .background(theme.popSolid)
+            .background(theme.bg2)
             .presentationDetents([.medium, .large])
         }
     }

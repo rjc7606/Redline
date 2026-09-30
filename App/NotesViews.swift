@@ -115,13 +115,13 @@ struct TagRow: View {
                     Text(t).font(fnt(11.5, .bold))
                     Button { editor.removeTag(t, page: pageIndex) } label: { Text("×").font(fnt(12, .heavy)).opacity(0.6) }.buttonStyle(.plain)
                 }
-                .foregroundStyle(theme.accent).padding(.horizontal, 9).padding(.vertical, 3)
+                .foregroundStyle(theme.accent).padding(.horizontal, 10).frame(height: 26)
                 .background(Capsule().fill(theme.accent.opacity(0.12)))
             }
             Button { editor.tagPopoverPage = editor.tagPopoverPage == pageIndex ? nil : pageIndex; editor.tagDraft = "" } label: {
-                HStack(spacing: 3) { Image(systemName: "tag").font(fnt(11)); Text("Tag").font(fnt(11.5, .bold)) }
-                    .foregroundStyle(theme.ink3).padding(.horizontal, 9).padding(.vertical, 3)
-                    .overlay(Capsule().stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])))
+                HStack(spacing: 4) { Image(systemName: "tag").font(fnt(11)); Text("Tag").font(fnt(12, .semibold)) }
+                    .foregroundStyle(theme.ink3).padding(.horizontal, 10).frame(height: 26)
+                    .overlay(Capsule().stroke(theme.line2, lineWidth: 1))
             }
             .buttonStyle(.plain)
             .popover(isPresented: Binding(get: { editor.tagPopoverPage == pageIndex }, set: { if !$0 { editor.tagPopoverPage = nil } }), arrowEdge: .top) {
@@ -170,7 +170,7 @@ struct CalendarView: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 7), spacing: 6) {
                 ForEach(month.cells) { cell in
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(cell.day.map(String.init) ?? "").font(fnt(12, .bold)).foregroundStyle(cell.isToday ? theme.accent : theme.ink2)
+                        Text(cell.day.map(String.init) ?? "").font(fnt(13, .semibold)).foregroundStyle(cell.isToday ? theme.accent : theme.ink2)
                         FlowLayout(spacing: 4) {
                             ForEach(cell.pages, id: \.self) { i in
                                 let pg = editor.doc.pages[i]
@@ -178,17 +178,17 @@ struct CalendarView: View {
                                     RoundedRectangle(cornerRadius: 3).fill(Color(hex: pg.paper.hex))
                                     Text(i == 0 ? "C" : "\(i)").font(fnt(8, .heavy)).foregroundStyle(Color.black.opacity(0.5)).padding(.bottom, 2)
                                 }
-                                .frame(width: 30, height: 40)
+                                .frame(width: 28, height: 36)
                                 .shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
                                 .onTapGesture { editor.setPage(i); editor.journalView = .book }
                             }
                         }
                         Spacer(minLength: 0)
                     }
-                    .padding(6)
-                    .frame(maxWidth: .infinity, minHeight: 96, alignment: .topLeading)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(cell.isToday ? theme.accent.opacity(0.08) : theme.card))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(cell.isToday ? theme.accent : theme.line, lineWidth: 1))
+                    .padding(8)
+                    .frame(maxWidth: .infinity, minHeight: 96, maxHeight: 150, alignment: .topLeading)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.card))
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(cell.isToday ? theme.accent : theme.line, lineWidth: cell.isToday ? 2 : 1))
                     .opacity(cell.day == nil ? 0.35 : 1)
                 }
             }

@@ -173,7 +173,7 @@ struct ExportMenu: View {
         .frame(width: Metrics.exportWidth)
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(theme.popSolid)
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-            .shadow(color: .black.opacity(0.24), radius: 20, y: 12))
+            .shadow(color: theme.popShadow, radius: 20, y: 12))
     }
 }
 
@@ -236,11 +236,11 @@ struct FlattenDialog: View {
 
 struct OrganizePagesView: View {
     @Environment(\.theme) private var theme
-    @Environment(AppModel.self) private var app
     var editor: WorkspaceModel
-    @State private var insertMenu = false
+    @State private var selected: Int? = nil
 
     var body: some View {
+        let sel = selected ?? editor.pageIndex
         VStack(spacing: 0) {
             HStack {
                 Text("Organize Pages").font(fnt(21, .heavy)).foregroundStyle(theme.ink1)
@@ -248,58 +248,34 @@ struct OrganizePagesView: View {
                 PrimaryButton(label: "Done", height: 32) { editor.organizeOpen = false }
             }
             .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 4)
-            Text("Drag to reorder · tap a page to open it").font(fnt(12)).foregroundStyle(theme.ink4).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 4)
+            Text("Tap a page to select it, tap again to open · drag to reorder").font(fnt(12)).foregroundStyle(theme.ink4).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 4)
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 24)], spacing: 24) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 160), spacing: 24, alignment: .top)], alignment: .leading, spacing: 24) {
                     ForEach(Array(editor.doc.pages.enumerated()), id: \.element.id) { i, pg in
-                        VStack(spacing: 6) {
-                            ZStack(alignment: .bottom) {
-                                PageThumbnail(editor: editor, pageIndex: i, width: 210)
-                                    .frame(maxWidth: .infinity)
-                                HStack(spacing: 8) {
-                                    orgButton("rotate.right", tint: theme.ink2) { editor.rotatePage(at: i) }
-                                    orgButton("doc.on.doc", tint: theme.ink2) { editor.duplicatePage(at: i) }
-                                    orgButton("trash", tint: theme.danger) { editor.deletePage(at: i) }
+                        VStack(spacing: 8) {
+                            PageThumbnail(editor: editor, pageIndex: i, width: 160)
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(i == sel ? theme.accent : .clear, lineWidth: 2).padding(-3))
+                                .contentShape(Rectangle())
+                                .onTapGesture { if sel == i { editor.setPage(i); editor.organizeOpen = false } else { selected = i } }
+                                .draggable(pg.id)
+                                .dropDestination(for: String.self) { items, _ in
+                                    guard let id = items.first, let from = editor.doc.pageIndex(of: id) else { return false }
+                                    editor.movePage(from: from, to: i)
+                                    return true
                                 }
-                                .padding(5)
-                                .background(RoundedRectangle(cornerRadius: 7).fill(theme.popSolid).shadow(color: .black.opacity(0.18), radius: 2, y: 1))
-                                .padding(6)
-                            }
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(i == editor.pageIndex ? theme.accent : .clear, lineWidth: 2.5).padding(-2))
-                            .contentShape(Rectangle())
-                            .onTapGesture { editor.setPage(i); editor.organizeOpen = false }
-                            .draggable(pg.id)
-                            .dropDestination(for: String.self) { items, _ in
-                                guard let id = items.first, let from = editor.doc.pageIndex(of: id) else { return false }
-                                editor.movePage(from: from, to: i)
-                                return true
-                            }
-                            HStack(spacing: 6) {
-                                Text("\(i + 1)").font(fnt(11.5, .bold)).foregroundStyle(theme.ink4)
-                                Text(pg.label.isEmpty ? "Page \(i + 1)" : pg.label).font(fnt(11.5)).foregroundStyle(theme.ink3).lineLimit(1)
+                            Text(pg.label.isEmpty ? "Page \(i + 1)" : pg.label).font(fnt(12, .semibold)).foregroundStyle(theme.ink3).lineLimit(1)
+                            if i == sel {
+                                OrganizeActionPill(rotate: { editor.rotatePage(at: i) }, duplicate: { editor.duplicatePage(at: i) }, delete: { editor.deletePage(at: i); selected = nil })
                             }
                         }
                     }
-                    Menu {
-                        Button("Blank Page") { editor.addPage() }
-                        Button("Append PDF…") { app.flash("Append PDF — coming soon") }
-                        Button("Extract Pages…") { app.flash("Extract pages — coming soon") }
-                    } label: {
-                        HStack(spacing: 7) { Image(systemName: "plus").font(fnt(13, .bold)); Text("Insert Page").font(fnt(13, .semibold)) }
-                            .foregroundStyle(theme.accent)
-                            .frame(maxWidth: .infinity).aspectRatio(1.414, contentMode: .fit)
-                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
-                    }
+                    Button { editor.addPage() } label: {
+                        BlankPageTile(aspect: CGFloat(editor.canvas.w / editor.canvas.h))
+                    }.buttonStyle(.plain)
                 }
                 .padding(.horizontal, 24).padding(.vertical, 16)
             }
         }
         .background(theme.bg2)
-    }
-
-    private func orgButton(_ symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(fnt(13, .medium)).foregroundStyle(tint).frame(width: 30, height: 26)
-        }.buttonStyle(.plain)
     }
 }

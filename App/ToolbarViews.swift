@@ -79,7 +79,7 @@ struct PresetsDropdown: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(theme.popSolid)
                 .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(theme.line, lineWidth: 1))
-                .shadow(color: Shadows.popover.color, radius: Shadows.popover.radius, y: Shadows.popover.y)
+                .shadow(color: theme.popShadow, radius: Shadows.popover.radius, y: Shadows.popover.y)
         )
     }
 }
@@ -137,7 +137,9 @@ struct TopBar<Center: View>: View {
                 BarButton(symbol: "minus.magnifyingglass", label: "Zoom out") { editor.zoomOut() }
                 BarButton(symbol: "plus.magnifyingglass", label: "Zoom in") { editor.zoomIn() }
             }
-            BarButton(symbol: "ruler", label: "Ruler", active: editor.ruler.on) { editor.toggleRuler() }
+            if editor.type != .markup {
+                BarButton(symbol: "ruler", label: "Ruler", active: editor.ruler.on) { editor.toggleRuler() }
+            }
             BarButton(symbol: "square.and.arrow.up", label: "Share", active: editor.popover == .export, filledWhenActive: true) {
                 editor.popover = editor.popover == .export ? nil : .export
             }
@@ -210,8 +212,8 @@ struct MarkupTabSegment: View {
 
     private func tabPill(label: String, on: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(label).font(fnt(13, .semibold)).foregroundStyle(on ? theme.ink1 : theme.ink2)
-                .padding(.horizontal, compact ? 9 : 13).padding(.vertical, 5)
+            Text(label).font(fnt(13, .semibold)).foregroundStyle(on ? theme.ink1 : theme.ink2).lineLimit(1)
+                .padding(.horizontal, compact ? 9 : 13).frame(height: 26)
                 .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(on ? theme.card : .clear)
                     .shadow(color: on ? Shadows.pill.color : .clear, radius: Shadows.pill.radius, y: Shadows.pill.y))
         }.buttonStyle(.plain)
@@ -257,6 +259,9 @@ struct MarkupToolStrip: View {
                 .frame(maxWidth: .infinity)
             }
             Spacer(minLength: 0)
+            Rectangle().fill(theme.line2).frame(width: 1, height: 30).padding(.horizontal, 8)
+            BarButton(symbol: "ruler", label: "Ruler", active: editor.ruler.on) { editor.toggleRuler() }
+                .padding(.trailing, 10)
         }
         .frame(height: Metrics.barHeight)
         .background(theme.bar.background(.regularMaterial))

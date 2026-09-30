@@ -56,6 +56,8 @@ struct StylePopoverView: View {
     var apply: (((inout StylePreset) -> Void) -> Void)? = nil
     var forTool: Tool? = nil
     var showPresets = true
+    /// Inside the annotation popup: no presets, no preview row, takes the parent's width.
+    var embedded = false
     @State private var fontPickerOn = false
 
     var body: some View {
@@ -73,7 +75,7 @@ struct StylePopoverView: View {
         let range = ToolStyles.widthRange(for: tool)
 
         VStack(alignment: .leading, spacing: 0) {
-            if showPresets { PresetsRow(editor: editor).padding(.bottom, 12) }
+            if showPresets && !embedded { PresetsRow(editor: editor).padding(.bottom, 12) }
 
             if tool == .eraser {
                 SliderRow(label: "Eraser size", value: Binding(get: { st.width }, set: { v in set { $0.width = v } }),
@@ -103,8 +105,7 @@ struct StylePopoverView: View {
                             Image(systemName: "textformat").font(fnt(13, .semibold)).foregroundStyle(theme.ink4)
                         }
                         .padding(.horizontal, 12).frame(height: 38)
-                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.card))
-                        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(theme.line, lineWidth: 1))
+                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
                     }
                     .buttonStyle(.plain)
                     if st.font != nil {
@@ -185,6 +186,7 @@ struct StylePopoverView: View {
                       range: 0.1...1, step: 0.05, valueLabel: "\(Int((opVal * 100).rounded()))%")
                 .padding(.top, 16)
 
+            if !embedded {
             HStack(spacing: 10) {
                 Text("Preview").font(fnt(11)).foregroundStyle(theme.ink4)
                 if isText {
@@ -205,8 +207,9 @@ struct StylePopoverView: View {
             }
             .padding(.top, 14)
             }
+            }
         }
-        .frame(width: Metrics.popoverWidth)
+        .frame(width: embedded ? nil : CGFloat(Metrics.popoverWidth))
     }
 
     private func colorHeader(isText: Bool, isShape: Bool, isFill: Bool, target: StylePreset.Target) -> String {

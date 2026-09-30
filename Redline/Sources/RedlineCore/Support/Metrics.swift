@@ -9,8 +9,11 @@ public enum Metrics {
     public static let toolHit: Double = 44
     public static let toolGap: Double = 3
     public static let barPadding: Double = 12
-    public static let sidebarMarkup: Double = 232
-    public static let sidebarStudio: Double = 262
+    public static let sidebarMarkup: Double = 260
+    public static let sidebarStudio: Double = 260
+    /// Library tiles (handoff v2): document tile width, notebook cover size.
+    public static let docTile: Double = 132
+    public static let notebookTile = Size(104, 140)
     public static let homeNav: Double = 240
     public static let settingsNav: Double = 250
     public static let popoverWidth: Double = 250
@@ -59,17 +62,39 @@ public struct ThemeTokens: Sendable, Equatable {
     public var overlayBase: String
     public var canvas: String
     public var isDark: Bool
+    /// Text-field background (handoff v2).
+    public var field: String = "#e9e8ee"
+    /// Status chips: Open (amber) and resolved (green). Background hex + alpha, foreground hex.
+    public var chipOpenBg: String = "#FFF1DC", chipOpenBgAlpha: Double = 1, chipOpenFg: String = "#B25E00"
+    public var chipResolvedBg: String = "#E2F7E8", chipResolvedBgAlpha: Double = 1, chipResolvedFg: String = "#1D7A3B"
+    /// Destructive tint (system red; brighter in dark).
+    public var danger: String = "#FF3B30"
+    /// Popover shadow opacity.
+    public var popShadowAlpha: Double = 0.22
 
-    public static let light = ThemeTokens(accent: "#007AFF", bg: "#f2f2f7", bg2: "#eceaef", bg3: "#e4e2e8", card: "#ffffff",
-                                          bar: "#f9f9fb", barAlpha: 0.94, pop: "#fafafc", popAlpha: 0.97,
-                                          ink1: "#1c1c1e", ink2: "#3a3a3c", ink3: "#6d6d72", ink4: "#8e8e93", dis: "#c7c7cc",
-                                          lineAlpha: 0.09, line2Alpha: 0.25, hovAlpha: 0.05, hov2Alpha: 0.08, overlayBase: "#000000",
-                                          canvas: "#d9d8dd", isDark: false)
-    public static let dark = ThemeTokens(accent: "#007AFF", bg: "#000000", bg2: "#1c1c1e", bg3: "#2c2c2e", card: "#1c1c1e",
-                                         bar: "#1c1c1e", barAlpha: 0.94, pop: "#242426", popAlpha: 0.97,
-                                         ink1: "#f2f2f7", ink2: "#d1d1d6", ink3: "#a1a1a6", ink4: "#8e8e93", dis: "#48484a",
-                                         lineAlpha: 0.10, line2Alpha: 0.28, hovAlpha: 0.07, hov2Alpha: 0.12, overlayBase: "#ffffff",
-                                         canvas: "#0d0d0f", isDark: true)
+    public static let light: ThemeTokens = {
+        var t = ThemeTokens(accent: "#007AFF", bg: "#f2f2f7", bg2: "#eceaef", bg3: "#e4e2e8", card: "#ffffff",
+                            bar: "#f9f9fb", barAlpha: 0.94, pop: "#fafafc", popAlpha: 0.97,
+                            ink1: "#1c1c1e", ink2: "#3a3a3c", ink3: "#6d6d72", ink4: "#8e8e93", dis: "#c7c7cc",
+                            lineAlpha: 0.09, line2Alpha: 0.22, hovAlpha: 0.05, hov2Alpha: 0.08, overlayBase: "#000000",
+                            canvas: "#d9d8dd", isDark: false)
+        t.field = "#e9e8ee"
+        return t
+    }()
+    /// Dark theme (handoff v2): every surface lifted one step; only the page well stays near-black.
+    public static let dark: ThemeTokens = {
+        var t = ThemeTokens(accent: "#007AFF", bg: "#1c1c1f", bg2: "#232327", bg3: "#2f2f34", card: "#2a2a2e",
+                            bar: "#232327", barAlpha: 0.94, pop: "#2e2e33", popAlpha: 0.97,
+                            ink1: "#f2f2f7", ink2: "#d1d1d6", ink3: "#a3a3a8", ink4: "#8e8e93", dis: "#4a4a4f",
+                            lineAlpha: 0.08, line2Alpha: 0.18, hovAlpha: 0.06, hov2Alpha: 0.10, overlayBase: "#ffffff",
+                            canvas: "#121214", isDark: true)
+        t.field = "#2f2f34"
+        t.chipOpenBg = "#FF9F0A"; t.chipOpenBgAlpha = 0.16; t.chipOpenFg = "#FFB340"
+        t.chipResolvedBg = "#34C759"; t.chipResolvedBgAlpha = 0.16; t.chipResolvedFg = "#4CD964"
+        t.danger = "#FF453A"
+        t.popShadowAlpha = 0.5
+        return t
+    }()
 
     public init(accent: String, bg: String, bg2: String, bg3: String, card: String, bar: String, barAlpha: Double, pop: String,
                 popAlpha: Double, ink1: String, ink2: String, ink3: String, ink4: String, dis: String, lineAlpha: Double,
