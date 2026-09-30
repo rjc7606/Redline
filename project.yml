@@ -25,6 +25,12 @@ targets:
       properties:
         CFBundleDisplayName: Redline
         UILaunchScreen: {}
+        # Bundled page font (Source Sans 3, SIL Open Font License) — see App/Fonts/LICENSE.md.
+        UIAppFonts:
+          - SourceSans3-Regular.ttf
+          - SourceSans3-Medium.ttf
+          - SourceSans3-Semibold.ttf
+          - SourceSans3-Bold.ttf
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations~ipad:

@@ -202,6 +202,25 @@ enum AnnotationFactory {
         return a
     }
 
+    /// Bucket fill inside a closed outline: a /Polygon grouped under `root` (RT /Group), drawn beneath it.
+    static func fillPolygon(points: [CGPoint], colorHex: String, alpha: Double, root: PDFAnnotation, author: String) -> PDFAnnotation {
+        let b = bounds(for: points, inset: 1)
+        let a = RedlinePolygon(bounds: b, forType: PDFAnnotationSubtype(rawValue: "/Polygon"), withProperties: nil)
+        a.polygonVertices = points
+        a.color = PDFColors.uiColor(colorHex)
+        a.interiorColor = PDFColors.uiColor(colorHex)
+        a.opacityValue = alpha
+        let border = PDFBorder(); border.lineWidth = 0; a.border = border
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
+        var gid = root.value(forAnnotationKey: .redlineGroup) as? String
+        if gid == nil { gid = IDGen.make(); root.setValue(NSString(string: gid!), forAnnotationKey: .redlineGroup) }
+        a.setValue(NSString(string: gid!), forAnnotationKey: .redlineGroup)
+        a.setValue(root, forAnnotationKey: .inReplyTo)
+        a.setValue(NSString(string: "/Group"), forAnnotationKey: .replyType)
+        stamp(a, tool: .fill, author: author)
+        return a
+    }
+
     static func redaction(rect: CGRect, author: String) -> PDFAnnotation {
         let a = PDFAnnotation(bounds: rect, forType: .square, withProperties: nil)
         a.color = .black
@@ -213,8 +232,11 @@ enum AnnotationFactory {
 
     static func line(from p0: CGPoint, to p1: CGPoint, tool: Tool, style: StylePreset, author: String) -> PDFAnnotation {
         let w = CGFloat(style.width)
-        let b = bounds(for: [p0, p1], inset: max(w, 12))
-        let a = PDFAnnotation(bounds: b, forType: .line, withProperties: nil)
+        // A standard Line annotation (readers keep it editable as a line); Redline draws it with round caps and
+        // joins on screen and writes that look as its appearance stream, like text boxes.
+        let b = bounds(for: [p0, p1], inset: max(w * 4, 14))
+        let a = RedlineLine(bounds: b, forType: .line, withProperties: nil)
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
         a.color = PDFColors.uiColor(style.color)
         let border = PDFBorder()
         border.lineWidth = w
@@ -252,22 +274,22 @@ enum AnnotationFactory {
     static func fontFor(_ style: StylePreset, size: CGFloat) -> UIFont {
         let weight: UIFont.Weight
         switch style.fontWeight { case .regular: weight = .regular; case .medium: weight = .medium; case .bold: weight = .bold; default: weight = .semibold }
-        if let name = style.font, !name.isEmpty {
-            // A specific face picked from the device's fonts (PostScript name) is used as-is.
-            if let f = UIFont(name: name, size: size) { return f }
-            var desc = UIFontDescriptor(fontAttributes: [.family: name])
-            if style.fontWeight == .bold || style.fontWeight == .semibold, let bold = desc.withSymbolicTraits(.traitBold) { desc = bold }
-            return UIFont(descriptor: desc, size: size)
-        }
-        return UIFont.systemFont(ofSize: size, weight: weight)
+        _ = weight
+        // A family from Redline's own list; the Weight setting picks the face.
+        if let name = style.font, !name.isEmpty { return RedlineFonts.face(name, size: size, weight: style.fontWeight) }
+        return RedlineFonts.page(size: size, weight: style.fontWeight)
     }
 
     /// Stamp-like text (APPROVED, date, initials): bordered bold FreeText so every reader shows it.
-    static func stampText(center: CGPoint, text: String, colorHex: String, author: String, tool: Tool) -> PDFAnnotation {
-        let font = UIFont.systemFont(ofSize: 18, weight: .bold)
+    static func stampText(center: CGPoint, text: String, colorHex: String, author: String, tool: Tool, rotation: CGFloat = -2) -> PDFAnnotation {
+        // Single-glyph marks (✓ ✗) are bigger; everything else is bold caps with a border, tilted like the preview.
+        let font = RedlineFonts.page(size: text.count == 1 ? 30 : 18, weight: .bold)
         let size = (text as NSString).size(withAttributes: [.font: font])
-        let rect = CGRect(x: center.x - size.width / 2 - 12, y: center.y - size.height / 2 - 6, width: size.width + 24, height: size.height + 12)
+        let inner = CGSize(width: size.width + 24, height: size.height + 12)
+        let outer = TextBoxRenderer.outerSize(inner: inner, rotation: rotation)
+        let rect = CGRect(x: center.x - outer.width / 2, y: center.y - outer.height / 2, width: outer.width, height: outer.height)
         let a = RedlineFreeText(bounds: rect, forType: .freeText, withProperties: nil)
+        a.rotationDegrees = rotation
         a.font = font
         a.fontColor = PDFColors.uiColor(colorHex)
         a.color = UIColor.white.withAlphaComponent(0.85)   // box fill
@@ -283,9 +305,10 @@ enum AnnotationFactory {
     }
 
     static func note(at p: CGPoint, style: StylePreset, author: String) -> PDFAnnotation {
-        let a = PDFAnnotation(bounds: CGRect(x: p.x - 12, y: p.y - 12, width: 24, height: 24), forType: .text, withProperties: nil)
+        let a = RedlineNote(bounds: CGRect(x: p.x - 12, y: p.y - 12, width: 24, height: 24), forType: .text, withProperties: nil)
         a.color = PDFColors.uiColor(style.color)
-        a.iconType = .comment
+        a.iconType = .comment   // fallback icon for readers that ignore the appearance stream
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
         stamp(a, tool: .note, author: author)
         return a
     }
@@ -315,7 +338,8 @@ enum AnnotationFactory {
     }
 
     static func widget(rect: CGRect, type: FieldType, name: String, author: String) -> PDFAnnotation {
-        let a = PDFAnnotation(bounds: rect, forType: .widget, withProperties: nil)
+        let a = RedlineWidget(bounds: rect, forType: .widget, withProperties: nil)
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
         switch type {
         case .check: a.widgetFieldType = .button; a.widgetControlType = .checkBoxControl
         case .radio: a.widgetFieldType = .button; a.widgetControlType = .radioButtonControl
@@ -325,8 +349,9 @@ enum AnnotationFactory {
         default: a.widgetFieldType = .text
         }
         a.fieldName = name
-        a.backgroundColor = UIColor.systemBlue.withAlphaComponent(0.1)
-        a.color = UIColor.systemBlue.withAlphaComponent(0.6)
+        // /MK colours for readers that build their own field appearance: the same tint and border Redline draws.
+        a.backgroundColor = WidgetRenderer.fill
+        a.color = WidgetRenderer.border
         let border = PDFBorder(); border.lineWidth = 1; a.border = border
         stamp(a, tool: ToolCatalog.tool(for: type), author: author)
         return a
@@ -387,6 +412,9 @@ struct AnnotationSnapshot {
     var endPoint: CGPoint?
     var quads: [NSValue]?
     var iconType: PDFTextAnnotationIconType?
+    var vertices: [CGPoint]?
+    /// The appearance stream at snapshot time (restored on undo so a foreign annotation keeps its original look).
+    var appearance: Any?
 
     @MainActor
     init(_ a: PDFAnnotation) {
@@ -398,6 +426,8 @@ struct AnnotationSnapshot {
         endPoint = a.subtype == "Line" ? a.endPoint : nil
         quads = a.quadrilateralPoints as? [NSValue]
         iconType = a.subtype == "Text" ? a.iconType : nil
+        vertices = a.subtype == "Polygon" ? a.polygonVertices : nil
+        appearance = a.value(forAnnotationKey: .appearanceDictionary)
     }
 
     @MainActor
@@ -419,7 +449,8 @@ struct AnnotationSnapshot {
         if let endPoint { a.endPoint = endPoint }
         if let quads { a.quadrilateralPoints = quads }
         if let iconType { a.iconType = iconType }
-        a.dropAppearance()
+        if let vertices { a.polygonVertices = vertices }
+        if let appearance { a.setValue(appearance, forAnnotationKey: .appearanceDictionary) } else { a.dropAppearance() }
     }
 }
 

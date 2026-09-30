@@ -115,20 +115,23 @@ struct DocTile<Extra: View>: View {
                 .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(theme.line, lineWidth: 1))
                 .pageShadow(theme)
         case .drawing:
-            // Page stack: three sheets offset 3 pt, the front one rendered.
-            let w = Metrics.docTile - 6, h = ((Metrics.docTile - 6) / pageAspect).rounded()
+            // Page stack (three sheets offset 3 pt, the front one rendered) on a bg3 backing box.
+            let w = Metrics.docTile - 30, h = ((Metrics.docTile - 30) / pageAspect).rounded()
             ZStack(alignment: .topLeading) {
                 ForEach([2, 1], id: \.self) { i in
-                    RoundedRectangle(cornerRadius: 6, style: .continuous).fill(theme.card)
-                        .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(theme.line, lineWidth: 1))
+                    RoundedRectangle(cornerRadius: 4, style: .continuous).fill(theme.card)
+                        .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).stroke(theme.line, lineWidth: 1))
                         .frame(width: w, height: h).offset(x: CGFloat(i) * 3, y: CGFloat(i) * 3)
                 }
                 ZStack { Color.white; DocumentThumbnail(doc: doc) }
                     .frame(width: w, height: h)
-                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(theme.line, lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 4, style: .continuous).stroke(theme.line, lineWidth: 1))
             }
-            .frame(width: Metrics.docTile, height: h + 6, alignment: .topLeading)
+            .padding(12)
+            .frame(width: Metrics.docTile, height: h + 30, alignment: .topLeading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(theme.bg3))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(theme.line, lineWidth: 1))
             .pageShadow(theme)
         case .journal:
             // The cover page, rendered with its styling and ink, is the thumbnail (GoodNotes-style).

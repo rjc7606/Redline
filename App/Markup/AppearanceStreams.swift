@@ -10,6 +10,24 @@ extension PDFAnnotationKey {
     static let redlineID = PDFAnnotationKey(rawValue: "/RedlineID")
     static let redlineBorder = PDFAnnotationKey(rawValue: "/RedlineBorder")
     static let redlineRadius = PDFAnnotationKey(rawValue: "/RedlineRadius")
+    /// Set once the user dragged a text box's corner: the width is theirs, only the height follows the text.
+    static let redlineSized = PDFAnnotationKey(rawValue: "/RedlineSized")
+    /// Tilt in degrees (stamps sit at -2°, like their preview).
+    static let redlineRotation = PDFAnnotationKey(rawValue: "/RedlineRotation")
+    /// Standard PDF polygon vertices (x y x y …, page space).
+    static let vertices = PDFAnnotationKey(rawValue: "/Vertices")
+}
+
+/// Tabler outline glyphs (24-grid, 2 pt stroke) drawn on the page.
+enum Glyphs {
+    /// `ti ti-sticker-2`
+    static let sticker = "M6 4h12a2 2 0 0 1 2 2v7h-5a2 2 0 0 0 -2 2v5h-7a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2z"
+    static let stickerFold = "M20 13v.172a2 2 0 0 1 -.586 1.414l-4.828 4.828a2 2 0 0 1 -1.414 .586h-.172"
+    /// `ti ti-bubble-text`
+    static let bubble = "M12.4 3a5.34 5.34 0 0 1 4.906 3.239a5.333 5.333 0 0 1 -1.195 10.6a4.26 4.26 0 0 1 -5.28 1.863l-3.831 2.298v-3.134a2.668 2.668 0 0 1 -1.795 -3.773a4.8 4.8 0 0 1 2.908 -8.933a5.33 5.33 0 0 1 4.287 -2.16"
+    static let bubbleLines = "M8 10h8M8 14h5"
+
+    static func cgPath(_ d: String, scale k: CGFloat) -> CGPath { SVGPath.parse(d).path(scale: Double(k)).cgPath }
 }
 
 /// Everything needed to draw a text box.
@@ -22,6 +40,7 @@ struct TextBoxLook {
     var font: UIFont
     var text: String
     var centered: Bool
+    var rotation: CGFloat = 0
     static let padding = CGSize(width: 8, height: 5)
 }
 
@@ -37,14 +56,40 @@ extension PDFAnnotation {
         set { setValue(NSNumber(value: Double(newValue)), forAnnotationKey: .redlineRadius) }
     }
 
+    var rotationDegrees: CGFloat {
+        get { CGFloat((value(forAnnotationKey: .redlineRotation) as? NSNumber)?.doubleValue ?? 0) }
+        set { if newValue == 0 { removeValue(forAnnotationKey: .redlineRotation) } else { setValue(NSNumber(value: Double(newValue)), forAnnotationKey: .redlineRotation) } }
+    }
+
     var isRedlineTextBox: Bool { subtype == "FreeText" && redlineID != nil }
+    var isRedlineNote: Bool { subtype == "Text" && redlineID != nil }
+    /// A bucket fill: a /Polygon with an interior colour, grouped under the outline it fills.
+    var isRedlinePolygon: Bool { subtype == "Polygon" && redlineID != nil }
+    /// A line / arrow drawn with Redline's rounded look.
+    var isRedlineLine: Bool { subtype == "Line" && redlineID != nil }
+    /// A form field drawn with Redline's look.
+    var isRedlineWidget: Bool { subtype == "Widget" && redlineID != nil }
+
+    /// Polygon vertices in page space.
+    var polygonVertices: [CGPoint] {
+        get {
+            guard let nums = value(forAnnotationKey: .vertices) as? [NSNumber], nums.count >= 4 else { return [] }
+            return stride(from: 0, to: nums.count - 1, by: 2).map { CGPoint(x: CGFloat(nums[$0].doubleValue), y: CGFloat(nums[$0 + 1].doubleValue)) }
+        }
+        set { setValue(newValue.flatMap { [NSNumber(value: Double($0.x)), NSNumber(value: Double($0.y))] } as NSArray, forAnnotationKey: .vertices) }
+    }
+    /// A text box whose width the user set by dragging its corner.
+    var isManuallySized: Bool {
+        get { (value(forAnnotationKey: .redlineSized) as? NSNumber)?.boolValue ?? false }
+        set { if newValue { setValue(NSNumber(value: true), forAnnotationKey: .redlineSized) } else { removeValue(forAnnotationKey: .redlineSized) } }
+    }
 
     var textBoxLook: TextBoxLook {
         let borderHex = borderColorHex ?? PDFColors.hex(fontColor ?? .black)
         return TextBoxLook(fill: color, textColor: fontColor ?? .black, border: PDFColors.uiColor(borderHex),
                            borderWidth: border?.lineWidth ?? 1, radius: cornerRadius,
-                           font: font ?? UIFont.systemFont(ofSize: 16, weight: .semibold), text: contents ?? "",
-                           centered: alignment == .center)
+                           font: font ?? RedlineFonts.page(size: 16, weight: nil), text: contents ?? "",
+                           centered: alignment == .center, rotation: rotationDegrees)
     }
 }
 
@@ -63,9 +108,296 @@ final class RedlineFreeText: PDFAnnotation {
     }
 }
 
+/// Sticky note drawn as the Tabler `sticker-2` glyph in the note's colour.
+final class RedlineNote: PDFAnnotation {
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        context.saveGState()
+        context.translateBy(x: bounds.minX, y: bounds.maxY)
+        context.scaleBy(x: 1, y: -1)
+        NoteRenderer.draw(color: color, size: bounds.size, in: context)
+        context.restoreGState()
+    }
+}
+
+/// Form field drawn with Redline's look (rounded tinted box, real check / radio / switch glyphs, placeholder names).
+final class RedlineWidget: PDFAnnotation {
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        context.saveGState()
+        context.translateBy(x: bounds.minX, y: bounds.maxY)
+        context.scaleBy(x: 1, y: -1)
+        UIGraphicsPushContext(context)
+        WidgetRenderer.draw(self, size: bounds.size, in: context)
+        UIGraphicsPopContext()
+        context.restoreGState()
+    }
+}
+
+enum WidgetRenderer {
+    static let accent = UIColor(hex: "#2F6FE4")
+    static let fill = UIColor(hex: "#EEF3FD")
+    static let border = UIColor(hex: "#7FA3EA")
+    static let ink = UIColor(hex: "#2a2622")
+    static let muted = UIColor(hex: "#968e84")
+
+    /// Draws a field into a y-down context whose origin is its top-left corner.
+    static func draw(_ a: PDFAnnotation, size: CGSize, in cg: CGContext) {
+        let rect = CGRect(origin: .zero, size: size)
+        let value = a.widgetStringValue ?? ""
+        let tool = a.redlineTool
+        switch a.widgetFieldType {
+        case .button:
+            let on = !value.isEmpty && value != "Off"
+            if tool == .ftoggle { drawSwitch(on: on, rect, cg) }
+            else if a.widgetControlType == .radioButtonControl { drawRadio(on: on, rect, cg) }
+            else { drawCheck(on: on, rect, cg) }
+        case .signature:
+            drawSignature(value: value, rect, cg)
+        default:
+            drawField(value: value, name: a.fieldName ?? "", rect, cg, area: tool == .farea, date: tool == .fdate, choice: a.widgetFieldType == .choice)
+        }
+    }
+
+    private static func box(_ rect: CGRect, radius: CGFloat, _ cg: CGContext) {
+        let path = UIBezierPath(roundedRect: rect.insetBy(dx: 0.6, dy: 0.6), cornerRadius: radius).cgPath
+        cg.setFillColor(fill.cgColor); cg.addPath(path); cg.fillPath()
+        cg.setStrokeColor(border.cgColor); cg.setLineWidth(1.2); cg.addPath(path); cg.strokePath()
+    }
+
+    private static func text(_ s: String, in r: CGRect, size: CGFloat, color: UIColor, italic: Bool = false, top: Bool = false) {
+        let font = italic ? UIFont.italicSystemFont(ofSize: size) : UIFont.systemFont(ofSize: size, weight: .medium)
+        let para = NSMutableParagraphStyle(); para.lineBreakMode = .byTruncatingTail
+        let str = NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: para])
+        var draw = r
+        if !top { draw.origin.y = r.midY - font.lineHeight / 2; draw.size.height = font.lineHeight }
+        str.draw(with: draw, options: [.usesLineFragmentOrigin], context: nil)
+    }
+
+    private static func drawField(value: String, name: String, _ rect: CGRect, _ cg: CGContext, area: Bool, date: Bool, choice: Bool) {
+        box(rect, radius: 4, cg)
+        let fs = max(8, min(12, rect.height * (area ? 0.22 : 0.5)))
+        var inner = rect.insetBy(dx: 6, dy: 3)
+        if choice || date { inner.size.width -= 16 }
+        if value.isEmpty {
+            let placeholder = name.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: #"\d+$"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces).capitalized
+            text(placeholder.isEmpty ? (date ? "Date" : "Text") : placeholder, in: inner, size: fs, color: muted, italic: true, top: area)
+        } else {
+            text(value, in: inner, size: fs, color: ink, top: area)
+        }
+        cg.setStrokeColor(border.cgColor); cg.setLineWidth(1.5); cg.setLineCap(.round); cg.setLineJoin(.round)
+        if choice {
+            let c = CGPoint(x: rect.maxX - 11, y: rect.midY)
+            cg.move(to: CGPoint(x: c.x - 4, y: c.y - 2)); cg.addLine(to: c.applying(.init(translationX: 0, y: 2))); cg.addLine(to: CGPoint(x: c.x + 4, y: c.y - 2)); cg.strokePath()
+        } else if date {
+            let s: CGFloat = 10
+            let r = CGRect(x: rect.maxX - 6 - s, y: rect.midY - s / 2, width: s, height: s)
+            cg.addPath(UIBezierPath(roundedRect: r, cornerRadius: 2).cgPath); cg.strokePath()
+            cg.move(to: CGPoint(x: r.minX, y: r.minY + 3)); cg.addLine(to: CGPoint(x: r.maxX, y: r.minY + 3)); cg.strokePath()
+        }
+    }
+
+    private static func drawCheck(on: Bool, _ rect: CGRect, _ cg: CGContext) {
+        let s = min(rect.width, rect.height)
+        let r = CGRect(x: rect.midX - s / 2, y: rect.midY - s / 2, width: s, height: s).insetBy(dx: 1, dy: 1)
+        let path = UIBezierPath(roundedRect: r, cornerRadius: s * 0.22).cgPath
+        cg.setFillColor((on ? accent : fill).cgColor); cg.addPath(path); cg.fillPath()
+        cg.setStrokeColor((on ? accent : border).cgColor); cg.setLineWidth(1.2); cg.addPath(path); cg.strokePath()
+        if on {
+            cg.setStrokeColor(UIColor.white.cgColor); cg.setLineWidth(max(1.5, s * 0.12)); cg.setLineCap(.round); cg.setLineJoin(.round)
+            cg.move(to: CGPoint(x: r.minX + r.width * 0.25, y: r.midY))
+            cg.addLine(to: CGPoint(x: r.minX + r.width * 0.43, y: r.minY + r.height * 0.7))
+            cg.addLine(to: CGPoint(x: r.minX + r.width * 0.77, y: r.minY + r.height * 0.3))
+            cg.strokePath()
+        }
+    }
+
+    private static func drawRadio(on: Bool, _ rect: CGRect, _ cg: CGContext) {
+        let s = min(rect.width, rect.height)
+        let r = CGRect(x: rect.midX - s / 2, y: rect.midY - s / 2, width: s, height: s).insetBy(dx: 1, dy: 1)
+        cg.setFillColor(fill.cgColor); cg.fillEllipse(in: r)
+        cg.setStrokeColor((on ? accent : border).cgColor); cg.setLineWidth(on ? 1.6 : 1.2); cg.strokeEllipse(in: r)
+        if on { cg.setFillColor(accent.cgColor); cg.fillEllipse(in: r.insetBy(dx: r.width * 0.28, dy: r.height * 0.28)) }
+    }
+
+    private static func drawSwitch(on: Bool, _ rect: CGRect, _ cg: CGContext) {
+        let h = min(rect.height, rect.width / 1.7)
+        let w = h * 1.7
+        let track = CGRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h)
+        cg.setFillColor((on ? accent : UIColor(hex: "#cfc9be")).cgColor)
+        cg.addPath(UIBezierPath(roundedRect: track, cornerRadius: h / 2).cgPath); cg.fillPath()
+        let k = h - 4
+        let knob = CGRect(x: on ? track.maxX - 2 - k : track.minX + 2, y: track.minY + 2, width: k, height: k)
+        cg.saveGState()
+        cg.setShadow(offset: CGSize(width: 0, height: 1), blur: 2, color: UIColor.black.withAlphaComponent(0.25).cgColor)
+        cg.setFillColor(UIColor.white.cgColor); cg.fillEllipse(in: knob)
+        cg.restoreGState()
+    }
+
+    private static func drawSignature(value: String, _ rect: CGRect, _ cg: CGContext) {
+        box(rect, radius: 4, cg)
+        let base = rect.minY + rect.height * 0.74
+        cg.setStrokeColor(border.cgColor); cg.setLineWidth(1)
+        cg.move(to: CGPoint(x: rect.minX + 8, y: base)); cg.addLine(to: CGPoint(x: rect.maxX - 8, y: base)); cg.strokePath()
+        text("×", in: CGRect(x: rect.minX + 6, y: base - 14, width: 12, height: 14), size: 11, color: muted)
+        if value.isEmpty {
+            text("Sign here", in: CGRect(x: rect.minX + 20, y: base - 14, width: rect.width - 28, height: 14), size: max(8, min(10, rect.height * 0.3)), color: muted, italic: true)
+        } else {
+            text(value, in: CGRect(x: rect.minX + 20, y: rect.minY + 2, width: rect.width - 28, height: base - rect.minY - 2), size: max(10, min(16, rect.height * 0.45)), color: ink, italic: true)
+        }
+    }
+
+    /// Text-like fields get an appearance stream; check / radio / switch states are left to the reader (they need
+    /// per-state streams), so only their /MK colours travel.
+    static func wantsAppearance(_ a: PDFAnnotation) -> Bool { a.isRedlineWidget && a.widgetFieldType != .button }
+
+    static func appearancePDF(for a: PDFAnnotation) -> Data {
+        let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
+        return UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+            c.beginPage()
+            draw(a, size: size, in: c.cgContext)
+        }
+    }
+}
+
+/// Line / arrow drawn with round caps and joins (PDFKit's default draws them square).
+final class RedlineLine: PDFAnnotation {
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        LineRenderer.draw(self, origin: bounds.origin, in: context)
+    }
+}
+
+enum LineRenderer {
+    /// Draws the shaft and open arrow heads in a context whose origin is `origin` (page space, y up).
+    static func draw(_ a: PDFAnnotation, origin: CGPoint, in cg: CGContext) {
+        let w = max(0.5, a.border?.lineWidth ?? 1)
+        // startPoint / endPoint are relative to the annotation's bounds.
+        let p0 = CGPoint(x: a.bounds.minX + a.startPoint.x - origin.x, y: a.bounds.minY + a.startPoint.y - origin.y)
+        let p1 = CGPoint(x: a.bounds.minX + a.endPoint.x - origin.x, y: a.bounds.minY + a.endPoint.y - origin.y)
+        cg.saveGState()
+        cg.setAlpha(CGFloat(a.opacityValue))
+        cg.setStrokeColor(a.color.cgColor)
+        cg.setLineWidth(w)
+        cg.setLineCap(.round); cg.setLineJoin(.round)
+        if a.border?.style == .dashed, let d = a.border?.dashPattern as? [NSNumber], !d.isEmpty { cg.setLineDash(phase: 0, lengths: d.map { CGFloat($0.doubleValue) }) }
+        cg.move(to: p0); cg.addLine(to: p1); cg.strokePath()
+        cg.setLineDash(phase: 0, lengths: [])
+        let size = max(10, w * 4)
+        func head(at tip: CGPoint, from: CGPoint) {
+            let ang = atan2(tip.y - from.y, tip.x - from.x)
+            cg.move(to: CGPoint(x: tip.x - size * cos(ang - 0.45), y: tip.y - size * sin(ang - 0.45)))
+            cg.addLine(to: tip)
+            cg.addLine(to: CGPoint(x: tip.x - size * cos(ang + 0.45), y: tip.y - size * sin(ang + 0.45)))
+            cg.strokePath()
+        }
+        if a.endLineStyle == .openArrow || a.endLineStyle == .closedArrow { head(at: p1, from: p0) }
+        if a.startLineStyle == .openArrow || a.startLineStyle == .closedArrow { head(at: p0, from: p1) }
+        cg.restoreGState()
+    }
+
+    static func appearancePDF(for a: PDFAnnotation) -> Data {
+        let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
+        let origin = a.bounds.origin
+        return UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+            c.beginPage()
+            let cg = c.cgContext
+            cg.translateBy(x: 0, y: size.height)
+            cg.scaleBy(x: 1, y: -1)
+            draw(a, origin: origin, in: cg)
+        }
+    }
+}
+
+/// Bucket fill drawn as a filled polygon (readers that know /Polygon /IC show it too; the appearance stream covers the rest).
+final class RedlinePolygon: PDFAnnotation {
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        PolygonRenderer.draw(self, origin: bounds.origin, in: context)
+    }
+}
+
+enum PolygonRenderer {
+    /// Fills the polygon in a context whose origin is `origin` (page space, y up).
+    static func draw(_ a: PDFAnnotation, origin: CGPoint, in cg: CGContext) {
+        let pts = a.polygonVertices
+        guard pts.count >= 3, let fill = a.interiorColor else { return }
+        cg.saveGState()
+        cg.setAlpha(CGFloat(a.opacityValue))
+        cg.setFillColor(fill.cgColor)
+        cg.move(to: CGPoint(x: pts[0].x - origin.x, y: pts[0].y - origin.y))
+        for p in pts.dropFirst() { cg.addLine(to: CGPoint(x: p.x - origin.x, y: p.y - origin.y)) }
+        cg.closePath()
+        cg.fillPath()
+        cg.restoreGState()
+    }
+
+    static func appearancePDF(for a: PDFAnnotation) -> Data {
+        let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
+        let origin = a.bounds.origin
+        return UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+            c.beginPage()
+            let cg = c.cgContext
+            // UIKit's PDF context is y-down; flip so page-space vertices land where readers expect.
+            cg.translateBy(x: 0, y: size.height)
+            cg.scaleBy(x: 1, y: -1)
+            draw(a, origin: origin, in: cg)
+        }
+    }
+}
+
+enum NoteRenderer {
+    /// Draws the sticker glyph into a y-down context whose origin is the note's top-left corner.
+    static func draw(color: UIColor, size: CGSize, in cg: CGContext) {
+        let k = min(size.width, size.height) / 24
+        cg.saveGState()
+        cg.translateBy(x: (size.width - 24 * k) / 2, y: (size.height - 24 * k) / 2)
+        let body = Glyphs.cgPath(Glyphs.sticker, scale: k)
+        cg.setFillColor(UIColor.white.withAlphaComponent(0.85).cgColor)
+        cg.addPath(body); cg.fillPath()
+        cg.setFillColor(color.withAlphaComponent(0.22).cgColor)
+        cg.addPath(body); cg.fillPath()
+        cg.setStrokeColor(color.cgColor)
+        cg.setLineWidth(2 * k); cg.setLineCap(.round); cg.setLineJoin(.round)
+        cg.addPath(body); cg.strokePath()
+        cg.addPath(Glyphs.cgPath(Glyphs.stickerFold, scale: k)); cg.strokePath()
+        cg.restoreGState()
+    }
+
+    static func appearancePDF(for a: PDFAnnotation) -> Data {
+        let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
+        let color = a.color
+        return UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+            c.beginPage()
+            draw(color: color, size: size, in: c.cgContext)
+        }
+    }
+}
+
 enum TextBoxRenderer {
-    /// Draws a text box into a y-down context whose origin is the box's top-left corner.
+    /// Draws a text box into a y-down context whose origin is the box's top-left corner. A tilted box (stamp)
+    /// is the un-tilted box rotated about the centre of its (larger) bounds.
     static func draw(_ look: TextBoxLook, size: CGSize, in cg: CGContext) {
+        guard look.rotation != 0 else { drawBox(look, size: size, in: cg); return }
+        let inner = innerSize(outer: size, rotation: look.rotation)
+        cg.saveGState()
+        cg.translateBy(x: size.width / 2, y: size.height / 2)
+        cg.rotate(by: look.rotation * .pi / 180)
+        cg.translateBy(x: -inner.width / 2, y: -inner.height / 2)
+        drawBox(look, size: inner, in: cg)
+        cg.restoreGState()
+    }
+
+    /// Bounds a box needs once tilted.
+    static func outerSize(inner: CGSize, rotation: CGFloat) -> CGSize {
+        let r = abs(rotation) * .pi / 180, c = cos(r), s = sin(r)
+        return CGSize(width: ceil(inner.width * c + inner.height * s), height: ceil(inner.width * s + inner.height * c))
+    }
+    /// The un-tilted box inside tilted bounds.
+    static func innerSize(outer: CGSize, rotation: CGFloat) -> CGSize {
+        let r = abs(rotation) * .pi / 180, c = cos(r), s = sin(r)
+        let det = c * c - s * s
+        guard det > 0.05 else { return outer }
+        return CGSize(width: max(1, (outer.width * c - outer.height * s) / det), height: max(1, (outer.height * c - outer.width * s) / det))
+    }
+
+    private static func drawBox(_ look: TextBoxLook, size: CGSize, in cg: CGContext) {
         let rect = CGRect(origin: .zero, size: size)
         let inset = look.borderWidth / 2
         let boxPath = UIBezierPath(roundedRect: rect.insetBy(dx: inset, dy: inset), cornerRadius: max(0, look.radius - inset))
@@ -118,7 +450,7 @@ enum TextBoxRenderer {
 enum AppearancePatcher {
     @discardableResult
     static func patch(fileURL: URL, annotations: [PDFAnnotation]) -> Bool {
-        let ours = annotations.filter { $0.isRedlineTextBox }
+        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || WidgetRenderer.wantsAppearance($0) }
         guard !ours.isEmpty, let data = try? Data(contentsOf: fileURL), let file = PDFFile(data: data) else { return ours.isEmpty }
         var byID: [String: (num: Int, dict: [String: PDFObj])] = [:]
         for page in file.pages() {
@@ -130,7 +462,12 @@ enum AppearancePatcher {
         var next = file.maxObjectNumber
         for a in ours {
             guard let id = a.redlineID, let entry = byID[id] else { continue }
-            let helperData = TextBoxRenderer.appearancePDF(for: a)
+            let helperData: Data
+            if a.isRedlineNote { helperData = NoteRenderer.appearancePDF(for: a) }
+            else if a.isRedlinePolygon { helperData = PolygonRenderer.appearancePDF(for: a) }
+            else if a.isRedlineLine { helperData = LineRenderer.appearancePDF(for: a) }
+            else if a.isRedlineWidget { helperData = WidgetRenderer.appearancePDF(for: a) }
+            else { helperData = TextBoxRenderer.appearancePDF(for: a) }
             guard let helper = PDFFile(data: helperData), let page = helper.pages().first else { continue }
             let importer = PDFObjectImporter(source: helper, firstFreeNumber: next)
             // Content stream(s) of the helper page become the form's content.
@@ -172,19 +509,37 @@ enum AppearancePatcher {
         do { try out.write(to: fileURL, options: .atomic); return true } catch { return false }
     }
 
-    /// Swaps plain FreeText annotations created by Redline for our drawing subclass after a document loads.
-    static func adoptTextBoxes(in doc: PDFDocument) {
-        for i in 0..<doc.pageCount {
-            guard let page = doc.page(at: i) else { continue }
-            for a in page.annotations where a.isRedlineTextBox && !(a is RedlineFreeText) {
-                let replacement = RedlineFreeText(bounds: a.bounds, forType: .freeText, withProperties: a.annotationKeyValues)
-                replacement.removeValue(forAnnotationKey: .appearanceDictionary)
-                page.removeAnnotation(a)
-                page.addAnnotation(replacement)
-                for other in page.annotations where (other.value(forAnnotationKey: .inReplyTo) as? PDFAnnotation) === a {
-                    other.setValue(replacement, forAnnotationKey: .inReplyTo)
-                }
+    /// Nothing is touched when a document loads: every annotation renders from the appearance stream the file
+    /// carries. A Redline-made annotation is promoted to its drawing subclass only when the user selects it, and
+    /// its appearance stream is kept until an edit replaces it.
+    static func needsPromotion(_ a: PDFAnnotation) -> Bool {
+        (a.isRedlineTextBox && !(a is RedlineFreeText)) || (a.isRedlineNote && !(a is RedlineNote))
+            || (a.isRedlinePolygon && !(a is RedlinePolygon)) || (a.isRedlineLine && !(a is RedlineLine))
+            || (a.isRedlineWidget && !(a is RedlineWidget))
+    }
+
+    /// Promotes a group of annotations in place: same page order, same keys (including /AP), replies re-pointed.
+    static func promote(_ group: [PDFAnnotation], on page: PDFPage) -> [PDFAnnotation] {
+        guard group.contains(where: needsPromotion) else { return group }
+        let ordered = page.annotations.filter { a in group.contains { $0 === a } }
+        var map: [ObjectIdentifier: PDFAnnotation] = [:]
+        for a in ordered { page.removeAnnotation(a) }
+        for a in ordered {
+            let r: PDFAnnotation
+            if !needsPromotion(a) { r = a }
+            else if a.isRedlineNote { r = RedlineNote(bounds: a.bounds, forType: .text, withProperties: a.annotationKeyValues) }
+            else if a.isRedlinePolygon { r = RedlinePolygon(bounds: a.bounds, forType: PDFAnnotationSubtype(rawValue: "/Polygon"), withProperties: a.annotationKeyValues) }
+            else if a.isRedlineLine { r = RedlineLine(bounds: a.bounds, forType: .line, withProperties: a.annotationKeyValues) }
+            else if a.isRedlineWidget { r = RedlineWidget(bounds: a.bounds, forType: .widget, withProperties: a.annotationKeyValues) }
+            else { r = RedlineFreeText(bounds: a.bounds, forType: .freeText, withProperties: a.annotationKeyValues) }
+            map[ObjectIdentifier(a)] = r
+            page.addAnnotation(r)
+        }
+        for other in page.annotations {
+            if let irt = other.value(forAnnotationKey: .inReplyTo) as? PDFAnnotation, let r = map[ObjectIdentifier(irt)], r !== irt {
+                other.setValue(r, forAnnotationKey: .inReplyTo)
             }
         }
+        return group.map { map[ObjectIdentifier($0)] ?? $0 }
     }
 }

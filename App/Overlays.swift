@@ -8,32 +8,107 @@ struct StampGalleryView: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
     var editor: WorkspaceModel
+    @State private var creating = false
+    @State private var draftText = ""
+    @State private var draftColor = "#E0332A"
+    @State private var draftDynamic = false
 
     var body: some View {
-        PopoverCard(width: 296) {
-            VStack(alignment: .leading, spacing: 10) {
-                SectionLabel(text: "Stamps — tap, then tap the page")
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 9), GridItem(.flexible(), spacing: 9)], spacing: 9) {
-                    ForEach(ToolCatalog.stampPresets, id: \.text) { s in
-                        let on = editor.stampText == s.text && editor.tool == .stamps
-                        Text(s.text).font(fnt(12, .bold)).tracking(1.2).foregroundStyle(Color(hex: s.color))
-                            .frame(maxWidth: .infinity).padding(.vertical, 7).padding(.horizontal, 4)
-                            .background(RoundedRectangle(cornerRadius: 6).fill(on ? theme.hov : .clear))
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(hex: s.color), lineWidth: 2.5))
-                            .rotationEffect(.degrees(-2))
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                editor.stampText = s.text; editor.stampColor = s.color; editor.tool = .stamps; editor.popover = nil
-                                app.flash("Tap the page to place \"\(s.text)\"")
-                            }
-                    }
+        let stamps = app.settings.allStamps
+        PopoverCard(width: 320) {
+            VStack(alignment: .leading, spacing: 12) {
+                section("Static", stamps.filter { !$0.dynamic })
+                section("Dynamic — filled in when placed", stamps.filter { $0.dynamic })
+                Rectangle().fill(theme.line).frame(height: 1)
+                if creating { createForm } else {
+                    Button { creating = true; draftText = ""; draftDynamic = false } label: {
+                        HStack(spacing: 6) { Image(systemName: "plus").font(fnt(13, .semibold)); Text("Create stamp…").font(fnt(13, .semibold)) }.foregroundStyle(theme.accent)
+                    }.buttonStyle(.plain)
+                    Text("Long-press a stamp to add it to your Favorites tab.").font(fnt(11)).foregroundStyle(theme.ink4)
                 }
-                Rectangle().fill(theme.line).frame(height: 1).padding(.top, 2)
-                Button { app.flash("Custom stamps — coming soon") } label: {
-                    Text("+ Create Custom Stamp…").font(fnt(13, .semibold)).foregroundStyle(theme.accent)
-                }.buttonStyle(.plain)
             }
         }
+        .frame(maxHeight: 560)
+    }
+
+    private func section(_ title: String, _ items: [StampDef]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionLabel(text: title)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 9), GridItem(.flexible(), spacing: 9)], spacing: 9) {
+                ForEach(items) { s in
+                    let on = editor.stamp.id == s.id && editor.tool == .stamps
+                    StampPreview(stamp: s, author: app.author, on: on)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editor.useStamp(s) }
+                        .contextMenu {
+                            Button("Add to Favorites tab", systemImage: "star") { editor.pinStamp(s) }
+                            if !s.builtIn {
+                                Button("Delete stamp", systemImage: "trash", role: .destructive) {
+                                    var st = app.settings; st.customStamps?.removeAll { $0.id == s.id }; app.settings = st
+                                }
+                            }
+                        }
+                }
+            }
+        }
+    }
+
+    private var createForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel(text: "New stamp")
+            SegmentControl(options: [SegmentOption(value: false, label: "Static"), SegmentOption(value: true, label: "Dynamic")], selection: $draftDynamic, fontSize: 12.5, vPad: 5, fill: true)
+            FieldText(placeholder: draftDynamic ? "e.g. CHECKED {date} by {initials}" : "Text", text: $draftText, height: 36, font: fnt(14))
+            if draftDynamic {
+                HStack(spacing: 6) {
+                    ForEach(StampDef.tokens, id: \.token) { t in
+                        Button { draftText += (draftText.isEmpty ? "" : " ") + t.token } label: {
+                            Text(t.label).font(fnt(11.5, .semibold)).foregroundStyle(theme.ink1).padding(.horizontal, 9).frame(height: 26)
+                                .background(Capsule().fill(theme.hov2))
+                        }.buttonStyle(.plain)
+                    }
+                }
+            }
+            HStack(spacing: 6) {
+                ForEach(Spectrum.quickPalette, id: \.self) { c in
+                    Circle().fill(Color(hex: c)).frame(width: 20, height: 20)
+                        .overlay(Circle().stroke(theme.accent, lineWidth: HexColor.same(c, draftColor) ? 2 : 0).padding(-3))
+                        .overlay(Circle().stroke(Color.black.opacity(0.1), lineWidth: 1))
+                        .onTapGesture { draftColor = c }
+                }
+            }
+            if !draftText.isEmpty {
+                StampPreview(stamp: StampDef(text: draftText, color: draftColor, dynamic: draftDynamic), author: app.author, on: false).frame(maxWidth: 150)
+            }
+            HStack {
+                Spacer()
+                SecondaryButton(label: "Cancel", height: 32) { creating = false }
+                PrimaryButton(label: "Save", height: 32) {
+                    let t = draftText.trimmingCharacters(in: .whitespaces)
+                    guard !t.isEmpty else { return }
+                    let s = StampDef(text: t, color: draftColor, dynamic: draftDynamic)
+                    var st = app.settings; st.customStamps = (st.customStamps ?? []) + [s]; app.settings = st
+                    creating = false
+                    editor.useStamp(s)
+                }
+            }
+        }
+    }
+}
+
+/// A stamp as it will look on the page: bold caps (or a big single mark) in a bordered box, tilted -2°.
+struct StampPreview: View {
+    @Environment(\.theme) private var theme
+    var stamp: StampDef
+    var author: String
+    var on: Bool
+    var body: some View {
+        Text(stamp.resolved(author: author))
+            .font(fnt(stamp.isMark ? 20 : 12, .bold)).tracking(stamp.isMark ? 0 : 1.2)
+            .foregroundStyle(Color(hex: stamp.color)).lineLimit(1).minimumScaleFactor(0.6)
+            .frame(maxWidth: .infinity).padding(.vertical, stamp.isMark ? 3 : 7).padding(.horizontal, 6)
+            .background(RoundedRectangle(cornerRadius: 6).fill(on ? theme.hov2 : theme.card.opacity(0.6)))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(hex: stamp.color), lineWidth: 2.5))
+            .rotationEffect(.degrees(-2))
     }
 }
 

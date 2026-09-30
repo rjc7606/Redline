@@ -58,7 +58,7 @@ struct StylePopoverView: View {
     var showPresets = true
     /// Inside the annotation popup: no presets, no preview row, takes the parent's width.
     var embedded = false
-    @State private var fontPickerOn = false
+    @State private var fontListOpen = false
 
     var body: some View {
         let tool = forTool ?? editor.styleTool
@@ -97,27 +97,22 @@ struct StylePopoverView: View {
 
             if isText && target == .font {
                 SectionLabel(text: "Font").padding(.bottom, 8)
-                HStack(spacing: 6) {
-                    Button { fontPickerOn = true } label: {
-                        HStack {
-                            Text(fontDisplayName(st.font)).font(textFont(st.font, size: 14, weight: st.fontWeight)).foregroundStyle(theme.ink1).lineLimit(1)
-                            Spacer()
-                            Image(systemName: "textformat").font(fnt(13, .semibold)).foregroundStyle(theme.ink4)
-                        }
-                        .padding(.horizontal, 12).frame(height: 38)
-                        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
+                // Redline's own list: one row per family, each name drawn in that family. Weight is set below.
+                Button { withAnimation(.easeOut(duration: 0.15)) { fontListOpen.toggle() } } label: {
+                    HStack {
+                        Text(fontDisplayName(st.font)).font(textFont(st.font, size: 14, weight: st.fontWeight)).foregroundStyle(theme.ink1).lineLimit(1)
+                        Spacer()
+                        Image(systemName: "chevron.down").font(fnt(12, .semibold)).foregroundStyle(theme.ink4).rotationEffect(.degrees(fontListOpen ? 180 : 0))
                     }
-                    .buttonStyle(.plain)
-                    if st.font != nil {
-                        Button { set { $0.font = nil } } label: {
-                            Image(systemName: "arrow.uturn.backward").font(fnt(13, .semibold)).foregroundStyle(theme.ink3).frame(width: 38, height: 38)
-                                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.card))
-                                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(theme.line, lineWidth: 1))
-                        }.buttonStyle(.plain).help("Back to the system font")
-                    }
+                    .padding(.horizontal, 12).frame(height: 38)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.field))
                 }
-                .sheet(isPresented: $fontPickerOn) { FontPicker { name in set { $0.font = name } } }
-                .padding(.bottom, 12)
+                .buttonStyle(.plain)
+                if fontListOpen {
+                    FontFamilyList(selected: st.font) { name in set { $0.font = name }; withAnimation(.easeOut(duration: 0.15)) { fontListOpen = false } }
+                        .padding(.top, 6)
+                }
+                Spacer().frame(height: 12)
                 SectionLabel(text: "Weight").padding(.bottom, 8)
                 SegmentControl(options: TextWeight.allCases.map { SegmentOption(value: $0, label: $0.label) },
                                selection: Binding(get: { st.fontWeight ?? .semibold }, set: { v in set { $0.fontWeight = v } }), fontSize: 11.5, vPad: 4, hPad: 4, radius: 8, fill: true)
@@ -346,5 +341,45 @@ struct LineSampleRect: View {
     var body: some View {
         RoundedRectangle(cornerRadius: 6)
             .stroke(color, style: StrokeStyle(lineWidth: width, dash: style == .solid ? [] : (style == .dash ? [width * 3, width * 2] : [0.1, width * 2.2])))
+    }
+}
+
+
+/// Every font family on the device, each row set in its own face. "Default" is Source Sans 3.
+struct FontFamilyList: View {
+    @Environment(\.theme) private var theme
+    var selected: String?
+    var onPick: (String?) -> Void
+    private let families = RedlineFonts.families
+
+    var body: some View {
+        ScrollView(showsIndicators: true) {
+            LazyVStack(spacing: 0) {
+                row(label: "Default · " + RedlineFonts.family, family: nil, on: selected == nil || selected == RedlineFonts.family)
+                ForEach(families.filter { $0 != RedlineFonts.family }, id: \.self) { f in
+                    row(label: f, family: f, on: selected == f)
+                }
+            }
+        }
+        .frame(maxHeight: 260)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(theme.line, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func row(label: String, family: String?, on: Bool) -> some View {
+        Button { onPick(family) } label: {
+            HStack(spacing: 8) {
+                Text(label).font(Font(RedlineFonts.face(family ?? RedlineFonts.family, size: 15, weight: .regular) as CTFont))
+                    .foregroundStyle(theme.ink1).lineLimit(1)
+                Spacer(minLength: 4)
+                if on { Image(systemName: "checkmark").font(fnt(12, .bold)).foregroundStyle(theme.accent) }
+            }
+            .padding(.horizontal, 12).frame(height: 36)
+            .background(on ? theme.hov : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottom) { Rectangle().fill(theme.line).frame(height: 1).padding(.leading, 12) }
     }
 }

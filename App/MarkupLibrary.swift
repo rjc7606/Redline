@@ -73,7 +73,7 @@ struct HomeBrowser: View {
                 SearchField(text: $app.homeQuery).padding(.top, 10).padding(.bottom, 14)
 
                 sectionLabel("Markups", DocumentType.markup.tint)
-                NavRow(label: "Recents", symbol: "clock", active: inMarkups && app.library == .recents, trailing: "\(app.store.recents(on: .markup).count)") { go(.recents) }
+                NavRow(label: "Recents", symbol: "clock", active: app.homeShelf == nil) { app.homeShelf = nil }
                 NavRow(label: "Favorites", symbol: "star", active: inMarkups && app.library == .favorites, trailing: "\(app.store.favorites(on: .markup).count)") { go(.favorites) }
                 NavRow(label: "On My iPad", symbol: "ipad", active: false) { go(.folder("")); expanded.insert("") }
                 folderRow(path: "", depth: 0)
@@ -197,7 +197,6 @@ struct HomeBrowser: View {
             Menu {
                 Button("Recents") { app.homeShelf = nil }
                 Section("Markups") {
-                    Button("Recents") { go(.recents) }
                     Button("Favorites") { go(.favorites) }
                     Button("Redline (On My iPad)") { go(.folder("")) }
                     ForEach(app.store.allFolders, id: \.self) { f in Button(f) { go(.folder(f)) } }
@@ -251,7 +250,7 @@ struct HomeBrowser: View {
                 Circle().fill(type.tint).frame(width: 8, height: 8)
                 Text(type.railLabel).font(fnt(15, .semibold)).foregroundStyle(theme.ink1)
                 Spacer()
-                SecondaryButton(label: "New", height: 30) { app.settings.shelf = type; app.newDraft = NewDocumentDraft(type: type) }
+                SecondaryButton(label: "New", symbol: "plus", height: 30) { app.settings.shelf = type; app.newDraft = NewDocumentDraft(type: type) }
                 Button { seeAll(type) } label: {
                     HStack(spacing: 2) { Text("See all").font(fnt(13, .semibold)); Image(systemName: "chevron.right").font(fnt(11, .bold)) }.foregroundStyle(theme.accent)
                 }.buttonStyle(.plain)
@@ -281,7 +280,7 @@ struct HomeBrowser: View {
     private func seeAll(_ type: DocumentType) {
         app.settings.shelf = type
         app.homeSort = .recent
-        if type == .markup { app.library = .recents }
+        if type == .markup { app.library = .folder("") }
         app.homeShelf = type
     }
 

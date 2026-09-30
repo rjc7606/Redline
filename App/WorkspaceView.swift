@@ -13,6 +13,7 @@ struct WorkspaceView: View {
             VStack(spacing: 0) {
                 TopBar(editor: editor, compact: compact) { topCenter(compact: compact) }
                 if editor.type == .markup { MarkupToolStrip(editor: editor) } else { StudioToolRow(editor: editor, compact: compact) }
+                DocTabsRow(current: editor.docID)
                 HStack(spacing: 0) {
                     content
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -155,5 +156,58 @@ struct KeyboardShortcuts: View {
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)
+    }
+}
+
+
+/// Open documents (README "open-document tabs row"): 48 tall, `bg2`, tabs radius 9 on top, min 130 / max 230.
+/// Tap switches, × closes. Documents stay open across Home until closed; opening from anywhere adds a tab.
+struct DocTabsRow: View {
+    @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
+    var current: ID
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .bottom, spacing: 4) {
+                    ForEach(app.openDocs, id: \.self) { id in
+                        if let d = app.store.document(id) { tab(d, on: id == current) }
+                    }
+                }
+                .padding(.horizontal, 10)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: Metrics.docTabsHeight)
+        .background(theme.bg2)
+        .overlay(alignment: .bottom) { Rectangle().fill(theme.line).frame(height: 1) }
+        .zIndex(54)
+    }
+
+    private func tab(_ d: Document, on: Bool) -> some View {
+        let shape = UnevenRoundedRectangle(topLeadingRadius: 9, bottomLeadingRadius: 0, bottomTrailingRadius: 0, topTrailingRadius: 9, style: .continuous)
+        return HStack(spacing: 8) {
+            Circle().fill(d.type.tint).frame(width: 8, height: 8)
+            Text(d.name).font(fnt(13, .semibold)).foregroundStyle(on ? theme.ink1 : theme.ink3).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 0)
+            Button { app.closeDocument(d.id) } label: {
+                Image(systemName: "xmark").font(fnt(10, .bold)).foregroundStyle(theme.ink4).frame(width: 20, height: 20)
+                    .background(Circle().fill(on ? theme.hov : .clear))
+            }.buttonStyle(.plain).accessibilityLabel("Close \(d.name)")
+        }
+        .padding(.leading, 12).padding(.trailing, 6)
+        .frame(minWidth: 130, maxWidth: 230)
+        .frame(height: 40)
+        .background(shape.fill(on ? theme.card : .clear))
+        .overlay(shape.stroke(on ? theme.line : .clear, lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture { if !on { app.openDocument(d.id) } }
+        .contextMenu {
+            Button("Close", systemImage: "xmark") { app.closeDocument(d.id) }
+            if app.openDocs.count > 1 {
+                Button("Close others") { for other in app.openDocs where other != d.id { app.closeDocument(other) } }
+            }
+        }
     }
 }

@@ -4,6 +4,7 @@ import RedlineCore
 @main
 struct RedlineApp: App {
     @State private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -11,6 +12,8 @@ struct RedlineApp: App {
                 .environment(model)
                 .preferredColorScheme(model.preferredColorScheme)
                 .onOpenURL { url in model.openPDF(from: url) }
+                // Leaving the foreground (switching apps, lock, termination) writes everything pending.
+                .onChange(of: scenePhase) { _, phase in if phase != .active { model.flushSaves() } }
         }
     }
 }

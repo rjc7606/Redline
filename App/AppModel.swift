@@ -42,6 +42,9 @@ final class AppModel {
     var store: RedlineStore
     var screen: Screen = .home
     var editor: WorkspaceModel? = nil
+    /// Documents open in the workspace, in tab order; each keeps its editor (tool, page, zoom, undo) while open.
+    var openDocs: [ID] = []
+    @ObservationIgnored private var editors: [ID: WorkspaceModel] = [:]
 
     var settingsOpen = false
     var settingsTab: SettingsTab = .general
@@ -93,16 +96,42 @@ final class AppModel {
 
     // MARK: navigation
 
+    /// Writes every pending edit now: open PDFs (their debounced save) and the JSON store.
+    func flushSaves() {
+        for e in editors.values where e.isPDF { e.mkSaveNow() }
+        saveNow()
+    }
+
     func openDocument(_ id: ID) {
         guard store.document(id) != nil else { return }
+        if let cur = editor, cur.docID != id, cur.isPDF { cur.mkSaveNow() }
         store.noteOpened(id)
-        editor = WorkspaceModel(app: self, docID: id)
+        if !openDocs.contains(id) { openDocs.append(id) }
+        let e = editors[id] ?? WorkspaceModel(app: self, docID: id)
+        editors[id] = e
+        editor = e
         screen = .workspace(id)
     }
 
+    /// Back to Home; open documents stay open (their tabs are waiting when you come back).
     func goHome() {
+        if let cur = editor, cur.isPDF { cur.mkSaveNow() }
         editor = nil
         screen = .home
+        scheduleSave()
+    }
+
+    /// Closes a tab. Pending PDF edits are written first. Switches to the neighbouring tab, or Home.
+    func closeDocument(_ id: ID) {
+        if let e = editors[id], e.isPDF { e.mkSaveNow() }
+        let wasCurrent = editor?.docID == id
+        let idx = openDocs.firstIndex(of: id) ?? 0
+        openDocs.removeAll { $0 == id }
+        editors[id] = nil
+        if wasCurrent {
+            if openDocs.isEmpty { goHome() }
+            else { openDocument(openDocs[min(idx, openDocs.count - 1)]) }
+        }
         scheduleSave()
     }
 
@@ -138,6 +167,7 @@ final class AppModel {
     }
 
     func deleteDocument(_ id: ID) {
+        if openDocs.contains(id) { editors[id] = nil; openDocs.removeAll { $0 == id }; if editor?.docID == id { editor = nil; screen = .home } }
         if let doc = store.document(id), let f = doc.pdfFile, !store.data.docs.contains(where: { $0.id != id && $0.pdfFile == f }) {
             pdf.forget(f)
             try? FileManager.default.removeItem(at: pdf.url(for: f))

@@ -74,61 +74,72 @@ extension EnvironmentValues {
     }
 }
 
-/// Font for text boxes / callouts: optional font (PostScript or family name, any font installed on the device)
-/// plus weight (nil = system semibold).
-func textFont(_ name: String?, size: Double, weight: TextWeight?) -> Font {
-    let w: Font.Weight
-    switch weight {
-    case .regular: w = .regular
-    case .medium: w = .medium
-    case .bold: w = .bold
-    case .semibold, nil: w = .semibold
-    }
-    if let name, !name.isEmpty {
-        if let ui = UIFont(name: name, size: size) { return Font(ui as CTFont) }
-        return Font.custom(name, size: size).weight(w)
-    }
-    return .system(size: size, weight: w)
-}
-
-/// "Avenir Next Demi Bold" for a stored font name; "System" when nil.
-func fontDisplayName(_ name: String?) -> String {
-    guard let name, !name.isEmpty else { return "System" }
-    if let f = UIFont(name: name, size: 12) {
-        let face = (f.fontDescriptor.object(forKey: .face) as? String) ?? ""
-        return face.isEmpty || face == "Regular" ? f.familyName : "\(f.familyName) \(face)"
-    }
-    return name
-}
-
-/// System font picker: every font on the device, including user-installed ones (which it also grants access to).
-struct FontPicker: UIViewControllerRepresentable {
-    var onPick: (String) -> Void
-
-    func makeUIViewController(context: Context) -> UIFontPickerViewController {
-        let config = UIFontPickerViewController.Configuration()
-        config.includeFaces = true
-        config.displayUsingSystemFont = false
-        let vc = UIFontPickerViewController(configuration: config)
-        vc.delegate = context.coordinator
-        return vc
-    }
-    func updateUIViewController(_ vc: UIFontPickerViewController, context: Context) {}
-    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
-
-    @MainActor
-    final class Coordinator: NSObject, UIFontPickerViewControllerDelegate {
-        let onPick: (String) -> Void
-        init(onPick: @escaping (String) -> Void) { self.onPick = onPick }
-        func fontPickerViewControllerDidPickFont(_ vc: UIFontPickerViewController) {
-            if let d = vc.selectedFontDescriptor {
-                let name = d.postscriptName.isEmpty ? ((d.object(forKey: .family) as? String) ?? "") : d.postscriptName
-                if !name.isEmpty { onPick(name) }
-            }
-            vc.dismiss(animated: true)
+/// Default face for text on the page (text boxes, callouts, stamps): Source Sans 3, bundled with the app
+/// (App/Fonts, SIL Open Font License) so an iPad and a Windows build draw the same glyphs and embed the same
+/// subset into PDFs. Falls back to the system font if the files are missing.
+enum RedlineFonts {
+    static let family = "Source Sans 3"
+    static func page(size: CGFloat, weight: TextWeight?) -> UIFont {
+        let name: String
+        let sys: UIFont.Weight
+        switch weight {
+        case .regular: name = "SourceSans3-Regular"; sys = .regular
+        case .medium: name = "SourceSans3-Medium"; sys = .medium
+        case .bold: name = "SourceSans3-Bold"; sys = .bold
+        case .semibold, nil: name = "SourceSans3-Semibold"; sys = .semibold
         }
-        func fontPickerViewControllerDidCancel(_ vc: UIFontPickerViewController) { vc.dismiss(animated: true) }
+        return UIFont(name: name, size: size) ?? UIFont.systemFont(ofSize: size, weight: sys)
     }
+
+    /// Every font family on the device (built in, bundled, and user-installed), one entry per family.
+    static var families: [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for f in UIFont.familyNames where !f.hasPrefix(".") {
+            // Static weights that declare their own family ("Source Sans 3 Semibold") fold into the base family.
+            let base = f.hasPrefix(family) ? family : f
+            if seen.insert(base).inserted { out.append(base) }
+        }
+        return out.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    /// The non-italic face of `name` (a family, or an older PostScript name) closest to the wanted weight.
+    static func face(_ name: String, size: CGFloat, weight: TextWeight?) -> UIFont {
+        if name == family { return page(size: size, weight: weight) }
+        let target: CGFloat
+        switch weight { case .regular: target = 0; case .medium: target = 0.23; case .bold: target = 0.4; default: target = 0.3 }
+        var faces = UIFont.fontNames(forFamilyName: name)
+        // Families split across several family names (e.g. "X Medium") — gather them all.
+        for other in UIFont.familyNames where other != name && other.hasPrefix(name + " ") { faces += UIFont.fontNames(forFamilyName: other) }
+        if faces.isEmpty {
+            guard let f = UIFont(name: name, size: size) else { return page(size: size, weight: weight) }
+            return f
+        }
+        var best: (name: String, diff: CGFloat)? = nil
+        for f in faces {
+            guard let font = UIFont(name: f, size: size) else { continue }
+            let d = font.fontDescriptor
+            if d.symbolicTraits.contains(.traitItalic) { continue }
+            let w = ((d.object(forKey: .traits) as? [UIFontDescriptor.TraitKey: Any])?[.weight] as? CGFloat) ?? 0
+            let diff = abs(w - target)
+            if best == nil || diff < best!.diff { best = (f, diff) }
+        }
+        return UIFont(name: best?.name ?? faces[0], size: size) ?? page(size: size, weight: weight)
+    }
+}
+
+/// Font for text boxes / callouts: optional font (PostScript or family name, any font installed on the device)
+/// plus weight (nil = the page default, Avenir Next).
+func textFont(_ name: String?, size: Double, weight: TextWeight?) -> Font {
+    if let name, !name.isEmpty { return Font(RedlineFonts.face(name, size: size, weight: weight) as CTFont) }
+    return Font(RedlineFonts.page(size: size, weight: weight) as CTFont)
+}
+
+/// The family name to show for a stored font (families are stored as-is; older data may hold a PostScript name).
+func fontDisplayName(_ name: String?) -> String {
+    guard let name, !name.isEmpty else { return RedlineFonts.family }
+    if UIFont.fontNames(forFamilyName: name).isEmpty, let f = UIFont(name: name, size: 12) { return f.familyName }
+    return name
 }
 
 /// System font at a point size (README type scale).

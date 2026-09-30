@@ -105,13 +105,15 @@ public struct ToolTab: Sendable, Hashable, Identifiable {
 
 public enum ToolCatalog {
     public static let pens: Set<Tool> = [.pen, .fineliner, .felt, .marker]
-    public static let closedShapes: Set<Tool> = [.rect, .ellipse, .polygon, .cloud]
+    public static let closedShapes: Set<Tool> = [.rect, .ellipse, .cloud]
     public static let lineLike: Set<Tool> = [.line, .arrow, .dblarrow, .polyline, .underline, .strike]
 
     /// Markup workspace tabs (excluding the user-defined Favorites tabs).
     public static let markupTabs: [ToolTab] = [
-        ToolTab(id: "draw", label: "Draw", tools: [.fineliner, .felt, .marker, .fill, .eraser, .rect, .ellipse, .line, .arrow, .dblarrow, .polyline, .polygon, .check, .xmark, .cloud, .distance, .perimeter, .area, .calibrate]),
-        ToolTab(id: "annotate", label: "Annotate", tools: [.highlighter, .underline, .strike, .squiggly, .textbox, .note, .callout, .stamps, .signature, .datestamp, .initials]),
+        // Polygon, check, x mark, date stamp and initials are gone from the tabs: marks and dates are stamps now
+        // (the enum cases stay so older documents and pins still decode).
+        ToolTab(id: "draw", label: "Draw", tools: [.fineliner, .felt, .marker, .fill, .eraser, .rect, .ellipse, .line, .arrow, .dblarrow, .polyline, .cloud, .distance, .perimeter, .area, .calibrate]),
+        ToolTab(id: "annotate", label: "Annotate", tools: [.highlighter, .underline, .strike, .squiggly, .textbox, .note, .callout, .stamps, .signature]),
         ToolTab(id: "edit", label: "Edit", tools: [.edittext, .image, .link, .redact, .rotatepg, .crop]),
         ToolTab(id: "forms", label: "Forms", tools: [.ftext, .farea, .fcheck, .fradio, .fdrop, .fdate, .fsig, .ftoggle])
     ]
@@ -131,9 +133,23 @@ public enum ToolCatalog {
         }
     }
 
-    public static let stampPresets: [(text: String, color: String)] = [
-        ("APPROVED", "#34C759"), ("REJECTED", "#FF3B30"), ("REVISED", "#007AFF"), ("FOR REVIEW", "#FF9500"),
-        ("DRAFT", "#8E8E93"), ("VOID", "#FF3B30"), ("FINAL", "#34C759"), ("SIGN HERE", "#5856D6")
+    /// Built-in stamps: static text, then dynamic ones whose tokens are filled in when placed.
+    public static let builtInStamps: [StampDef] = [
+        StampDef(id: "approved", text: "APPROVED", color: "#34C759", builtIn: true),
+        StampDef(id: "rejected", text: "REJECTED", color: "#FF3B30", builtIn: true),
+        StampDef(id: "revised", text: "REVISED", color: "#007AFF", builtIn: true),
+        StampDef(id: "review", text: "FOR REVIEW", color: "#FF9500", builtIn: true),
+        StampDef(id: "draft", text: "DRAFT", color: "#8E8E93", builtIn: true),
+        StampDef(id: "void", text: "VOID", color: "#FF3B30", builtIn: true),
+        StampDef(id: "final", text: "FINAL", color: "#34C759", builtIn: true),
+        StampDef(id: "signhere", text: "SIGN HERE", color: "#5856D6", builtIn: true),
+        StampDef(id: "check", text: "✓", color: "#34C759", builtIn: true),
+        StampDef(id: "xmark", text: "✗", color: "#FF3B30", builtIn: true),
+        StampDef(id: "received", text: "RECEIVED {date}", color: "#FF3B30", dynamic: true, builtIn: true),
+        StampDef(id: "date", text: "{date}", color: "#1c1c1e", dynamic: true, builtIn: true),
+        StampDef(id: "datetime", text: "{date} {time}", color: "#1c1c1e", dynamic: true, builtIn: true),
+        StampDef(id: "initials", text: "{initials}", color: "#007AFF", dynamic: true, builtIn: true),
+        StampDef(id: "author", text: "{author}", color: "#007AFF", dynamic: true, builtIn: true)
     ]
 
     // swiftlint:disable line_length
@@ -210,5 +226,36 @@ public enum ToolCatalog {
         case .stampGallery: return "Pick a stamp, then tap the page"
         default: return nil
         }
+    }
+}
+
+
+/// A stamp: static text, or dynamic text whose tokens ({date} {time} {author} {initials}) are filled in when placed.
+public struct StampDef: Codable, Sendable, Hashable, Identifiable {
+    public var id: String
+    public var text: String
+    public var color: String
+    public var dynamic: Bool
+    public var builtIn: Bool
+
+    public init(id: String = IDGen.make(), text: String, color: String, dynamic: Bool = false, builtIn: Bool = false) {
+        self.id = id; self.text = text; self.color = color; self.dynamic = dynamic; self.builtIn = builtIn
+    }
+
+    public static let tokens: [(token: String, label: String)] = [("{date}", "Date"), ("{time}", "Time"), ("{author}", "Name"), ("{initials}", "Initials")]
+
+    /// A single glyph stamp (✓ ✗) is drawn larger, without letter spacing.
+    public var isMark: Bool { text.count == 1 }
+
+    /// The text that goes on the page.
+    public func resolved(author: String, now: Date = Date()) -> String {
+        guard dynamic else { return text }
+        let f = DateFormatter()
+        f.dateStyle = .none
+        f.timeStyle = .short
+        return text.replacingOccurrences(of: "{date}", with: Formatting.shortDate(now))
+            .replacingOccurrences(of: "{time}", with: f.string(from: now))
+            .replacingOccurrences(of: "{author}", with: author)
+            .replacingOccurrences(of: "{initials}", with: Avatar.initials(author) + ".")
     }
 }

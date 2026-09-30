@@ -127,6 +127,9 @@ struct PDFCommentRow: View {
                     Button { editor.mkSetStatus(a, s) } label: { if s == item.status { Label(s.rawValue, systemImage: "checkmark") } else { Text(s.rawValue) } }
                 }
             }
+            if editor.mkSelectedFill != nil, selected {
+                Button("Remove fill", systemImage: "drop.slash") { editor.mkRemoveFill() }
+            }
             Button("Delete", systemImage: "trash", role: .destructive) { editor.mkSelectComment(item); editor.mkDeleteSelection() }
         }
         .animation(.easeOut(duration: 0.15), value: expanded)
@@ -150,11 +153,14 @@ struct PDFAnnotationPopup: View {
         if let a = mk.selectedPrimary, let page = a.page, let v = mk.pdfView, let b = editor.mkSelectionBounds,
            let item = editor.mkComments().first(where: { $0.annotation === a }) ?? Optional(editor.mkItem(a, page: page)) {
             let r = v.convert(b, from: page)
-            let fw = v.bounds.width, fh = v.bounds.height
-            let estHeight: CGFloat = mk.annotationProps ? 560 : 200
+            let fw = v.bounds.width
+            // Visible height: the keyboard may cover the bottom of the view.
+            let fh = max(200, v.bounds.height - mk.keyboardOverlap)
+            let est: CGFloat = min(560, 190 + CGFloat(item.replies.count) * 44 + (mk.replyFieldOpen ? 48 : 0) + (mk.annotationProps ? 360 : 0))
             let x = min(max(8, r.midX - width / 2), max(8, fw - width - 8))
-            let below = r.maxY + 14 + estHeight <= fh || r.minY - estHeight - 14 < 0
-            let y = below ? r.maxY + 14 : max(8, r.minY - estHeight - 14)
+            let below = r.maxY + 14 + est <= fh || r.minY - est - 14 < 8
+            // Never off the bottom (or under the keyboard): slide up over the annotation if it must.
+            let y = max(8, min(below ? r.maxY + 14 : r.minY - est - 14, fh - est - 8))
             let who = item.author == app.author ? "You" : item.author
             VStack(alignment: .leading, spacing: 0) {
                 // 1. Header (pinned): colour · glyph · kind · status · ×
@@ -239,6 +245,15 @@ struct PDFAnnotationPopup: View {
                         // 7. Properties: the Style editor, embedded
                         if mk.annotationProps, let preset = editor.mkSelectedPreset(), let tool = editor.mkSelectedTool {
                             Rectangle().fill(theme.line).frame(height: 1).padding(.top, 2)
+                            if let f = editor.mkSelectedFill {
+                                HStack(spacing: 8) {
+                                    RoundedRectangle(cornerRadius: 4).fill(Color(uiColor: f.annotation.interiorColor ?? .clear).opacity(f.isPolygon ? f.annotation.opacityValue : 1)).frame(width: 18, height: 18)
+                                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.line, lineWidth: 1))
+                                    Text("Fill").font(fnt(13, .medium)).foregroundStyle(theme.ink2)
+                                    Spacer()
+                                    SecondaryButton(label: "Remove fill", symbol: "drop.slash", height: 30) { editor.mkRemoveFill() }
+                                }
+                            }
                             StylePopoverView(editor: editor, stroke: preset, apply: { body in editor.mkUpdateSelectedStyle(body) }, forTool: tool, showPresets: false, embedded: true)
                                 .frame(width: width - 28)
                                 .padding(.top, 2)
@@ -293,29 +308,28 @@ struct PDFTextEditor: View {
         let _ = mk.viewportTick
         if let v = mk.pdfView {
             let a = edit.annotation
+            let _ = mk.textDraft
             let r = v.convert(a.bounds, from: edit.page)
             let z = v.scaleFactor
-            let font = a.font ?? UIFont.systemFont(ofSize: 16)
+            let font = a.font ?? RedlineFonts.page(size: 16, weight: nil)
             let fs = font.pointSize * z
-            HStack(alignment: .top, spacing: 4) {
-                TextField("Text", text: Binding(get: { mk.textDraft }, set: { mk.textDraft = $0 }), axis: .vertical)
-                    .font(Font(font.withSize(fs) as CTFont))
-                    .foregroundStyle(Color(uiColor: a.fontColor ?? .black))
-                    .textFieldStyle(.plain).lineLimit(1...8)
-                    .frame(width: max(120, 240 * z))
-                    .focused($focused)
-                    .onSubmit { editor.mkCommitTextEdit() }
-                Button { editor.mkCommitTextEdit() } label: {
-                    Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(.white).frame(width: 24, height: 24).background(Circle().fill(theme.accent))
-                }.buttonStyle(.plain)
-            }
-            .padding(.horizontal, 6 * z).padding(.vertical, 3 * z)
-            .background(RoundedRectangle(cornerRadius: a.cornerRadius * z).fill(Color(uiColor: a.color)))
-            .overlay(RoundedRectangle(cornerRadius: a.cornerRadius * z).stroke(Color(hex: a.borderColorHex ?? "#000000"), lineWidth: (a.border?.lineWidth ?? 1) * z))
-            .overlay(RoundedRectangle(cornerRadius: 3).stroke(theme.accent.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3])).padding(-3))
-            .fixedSize(horizontal: false, vertical: true)
-            .offset(x: r.minX, y: r.minY)
-            .onAppear { focused = true }
+            let padW = TextBoxLook.padding.width * z, padH = TextBoxLook.padding.height * z
+            // The editor is exactly the box: it starts empty-sized and the box grows with the text (mkLiveTextChanged).
+            TextField("", text: Binding(get: { mk.textDraft }, set: { mk.textDraft = $0 }), axis: .vertical)
+                .font(Font(font.withSize(fs) as CTFont))
+                .foregroundStyle(Color(uiColor: a.fontColor ?? .black))
+                .textFieldStyle(.plain).lineLimit(1...40)
+                .focused($focused)
+                .padding(.horizontal, padW).padding(.vertical, padH)
+                .frame(width: max(24, r.width), alignment: .topLeading)
+                .frame(minHeight: max(10, r.height), alignment: .topLeading)
+                .background(RoundedRectangle(cornerRadius: a.cornerRadius * z).fill(Color(uiColor: a.color)))
+                .overlay(RoundedRectangle(cornerRadius: a.cornerRadius * z).stroke(Color(hex: a.borderColorHex ?? "#000000"), lineWidth: (a.border?.lineWidth ?? 1) * z))
+                .overlay(RoundedRectangle(cornerRadius: 3).stroke(theme.accent.opacity(0.6), style: StrokeStyle(lineWidth: 1, dash: [4, 3])).padding(-3))
+                .fixedSize(horizontal: false, vertical: true)
+                .offset(x: r.minX, y: r.minY)
+                .onChange(of: mk.textDraft) { _, _ in editor.mkLiveTextChanged() }
+                .onAppear { focused = true }
         }
     }
 }

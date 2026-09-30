@@ -10,7 +10,12 @@ public struct FavoritesTab: Codable, Sendable, Equatable, Hashable, Identifiable
     public var pins: [String]
     public init(id: ID = IDGen.make(), name: String, pins: [String]) { self.id = id; self.name = name; self.pins = pins }
 
-    public var tools: [Tool] { pins.compactMap { Tool(rawValue: String($0.split(separator: "#")[0])) } }
+    /// A pin is a tool raw value, or "stamp:<id>" for a specific stamp (shown as the Stamps tool).
+    public var tools: [Tool] { pins.compactMap { $0.hasPrefix("stamp:") ? .stamps : Tool(rawValue: String($0.split(separator: "#")[0])) } }
+    public func stampID(at i: Int) -> String? {
+        guard pins.indices.contains(i), pins[i].hasPrefix("stamp:") else { return nil }
+        return String(pins[i].dropFirst(6))
+    }
 }
 
 /// Whether a finger may ink with the pens. `auto` blocks finger inking while an Apple Pencil is in use.
@@ -29,6 +34,10 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var fingerDrawing: FingerDrawing?
     /// Library folders created by the user (paths like "Projects/Meridian"), including empty ones.
     public var folders: [String]?
+    /// Stamps the user created (static or dynamic).
+    public var customStamps: [StampDef]?
+    /// Every stamp available in the gallery.
+    public var allStamps: [StampDef] { ToolCatalog.builtInStamps + (customStamps ?? []) }
     public var fingerDrawingMode: FingerDrawing {
         get { fingerDrawing ?? .auto }
         set { fingerDrawing = newValue }

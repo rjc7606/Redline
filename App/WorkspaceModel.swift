@@ -54,6 +54,8 @@ enum MkDrag {
     case rulerRotate(a0: CGFloat, r0: Double)
     case rulerTap
     case pan
+    /// Polyline: each clean tap places a vertex.
+    case polyTap(start: CGPoint)
 }
 enum MkDrawMode { case free, edge(offset: CGFloat, along0: CGFloat), lock }
 
@@ -117,8 +119,8 @@ final class WorkspaceModel {
     var palettesExpanded = false
     var popover: WorkspacePopover? = nil
     var organizeOpen = false
-    var stampText = "APPROVED"
-    var stampColor = "#34C759"
+    /// The stamp the Stamps tool places (static or dynamic).
+    var stamp: StampDef = ToolCatalog.builtInStamps[0]
     var ruler = RulerState()
     static let rulerLength = 820.0
     static let rulerHeight = 72.0
@@ -303,6 +305,7 @@ final class WorkspaceModel {
     func pick(_ t: Tool) {
         let info = t.info
         closePopovers()
+        if isPDF { mkFinishPolyline() }
         if info.kind == .flash { tool = t; presetsTool = nil; app.flash(info.message ?? ""); return }
         if info.kind == .pageAction { rotatePage(at: pageIndex); return }
         if info.kind == .stampGallery {
@@ -751,6 +754,36 @@ final class WorkspaceModel {
         return favorites[favoritesIndex].tools.filter { $0 == t }.count
     }
 
+    // MARK: stamps
+
+    /// Picks a stamp and arms the Stamps tool.
+    func useStamp(_ s: StampDef) {
+        stamp = s
+        if tool != .stamps { previousTool = tool; tool = .stamps }
+        presetsTool = nil
+        popover = nil
+        selection = []
+        fingerInkAllowed = nil
+        app.flash("Tap the page to place \"\(s.resolved(author: app.author))\"")
+    }
+
+    /// Adds a specific stamp to the current Favorites tab (or the first one).
+    func pinStamp(_ s: StampDef) {
+        var st = app.settings
+        let i = onFavoritesTab ? favoritesIndex : 0
+        guard st.favorites.indices.contains(i) else { return }
+        let key = "stamp:" + s.id
+        if !st.favorites[i].pins.contains(key) { st.favorites[i].pins.append(key) }
+        app.settings = st
+        app.flash("\"\(s.text)\" added to \(st.favorites[i].name)")
+    }
+
+    /// The stamp pinned at a strip position, when that pin is a stamp.
+    func pinnedStamp(at i: Int) -> StampDef? {
+        guard onFavoritesTab, favorites.indices.contains(favoritesIndex), let id = favorites[favoritesIndex].stampID(at: i) else { return nil }
+        return app.settings.allStamps.first { $0.id == id }
+    }
+
     // MARK: - Pointer input (page-scaled view coordinates)
 
     private func newStroke(_ t: Tool, at p: Point, pressure: Double, isPencil: Bool) -> Stroke {
@@ -1125,7 +1158,7 @@ final class WorkspaceModel {
             beginTextEdit(at: p, page: i)
         case .stampGallery:
             var s = newStroke(.stamps, at: p, pressure: 0.5, isPencil: false)
-            s.color = stampColor; s.text = stampText
+            s.color = stamp.color; s.text = stamp.resolved(author: app.author)
             commit(s, page: i)
         case .stampPreset:
             var s = newStroke(tool, at: p, pressure: 0.5, isPencil: false)

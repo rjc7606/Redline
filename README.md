@@ -65,19 +65,52 @@ swift test
 - Text boxes, callouts and stamps have their own look (rounded corners, any installed font, real border colour).
   It is drawn on screen by a PDFAnnotation subclass and written into the PDF as an appearance stream (a form
   XObject with the font embedded) through a small incremental-update writer, so every reader shows it identically.
-- Text boxes and callouts have a Font tab (any font on the device via the system font picker, including
-  user-installed fonts; weight, size, colour); placing a sticky note opens its comment for typing.
+  Nothing is rewritten when a document loads: every annotation renders from the appearance stream the file carries,
+  and Redline only takes over drawing one of its own annotations once you select and edit it. Moving an annotation
+  or editing its comment keeps its appearance stream; it is regenerated only when the rendering has to change
+  (restyle, resize, text on the page), and undo puts the original stream back.
+- Edits save themselves: PDF changes are written shortly after each edit, and everything pending is flushed when
+  you switch tabs, go Home, close a tab, or the app leaves the foreground.
+- Text on the page (text boxes, callouts, stamps) defaults to Source Sans 3, bundled in `App/Fonts` under the SIL
+  Open Font License so a future Windows build can ship the same file; any installed font can replace it.
+- Text boxes and callouts have a Font tab with Redline's own font list (every family on the device, including
+  bundled and user-installed ones, each name set in its own face); the Weight segment picks the face, plus size and
+  colour. A new text box starts empty-sized and grows as you type; tapping
+  outside closes it. Once selected, its bottom-right handle sets the box's width and height while the text keeps
+  its size and rewraps. Placing a sticky note (drawn as the sticker glyph, with its own appearance stream) opens
+  its comment for typing.
+- With a finger, a clean tap on any annotation selects it whatever tool is active, and dragging a selected
+  annotation moves it instead of panning.
 - Selecting an annotation shows a selection bar (Comment · Delete · ×); the Comment button, a badge tap or a sticky
   note opens the popup beside it: comment, status, replies (the reply field appears after tapping Reply) and a
   Properties editor that restyles the annotation itself. Annotations with comment text or replies show a speech-bubble
   badge in their own colour just above the ink; tapping it opens the popup. Sidebar rows expand in place to show the
   full text, Edit / Delete and replies.
+- Several documents can be open at once: a tabs row under the tool bar lists them (tap to switch, × to close).
+  They stay open across Home until closed, and opening from anywhere adds a tab. Each open document keeps its
+  tool, page, zoom and undo history while open.
+- Form fields have their own look (tinted rounded boxes with placeholder names, real check / radio / switch
+  glyphs, a signature line); text-type fields also carry that look as an appearance stream, and the same tint and
+  border go into the field's /MK colours for readers that draw fields themselves.
 - Markup and drawing pages stack in a native vertical scroll: free panning in any direction with rubber-band
   bounce (vertically always, horizontally when the page is wider than the view), finger pinch-zoom; the Pencil
   never scrolls. Zoomed-out pages are centred with the larger margins that leaves.
 - PDF pages render on a background queue; a neutral placeholder shows until each page image is ready.
-- The eraser cuts only the touched part out of ink strokes; its four presets are sizes.
+- The eraser cuts only the touched part out of pen ink (shapes, arrows, clouds and leaders stay whole) and shows
+  its outline while erasing; its four presets are sizes.
+- Select taps a single stroke: one stroke of a multi-stroke pen annotation is pulled out into its own annotation
+  and selected alone, so it can be moved by itself; the lasso does the same for the strokes it encloses.
+- Lines and arrows stay standard Line annotations but are drawn with round caps and joins on screen and in their
+  appearance stream. The bucket fills rectangles and ellipses directly, and fills clouds, closed polylines and pen
+  loops with a fill polygon grouped under the outline (moves, resizes and deletes with it; never text boxes, stamps
+  or notes). Properties in the popup, or the comment's long-press menu, can remove a fill.
 - Bucket fill works on shape-tool shapes and on pen strokes that close on themselves. Double-tapping an Apple Pencil switches
   to the eraser and back (it follows the system Pencil "Double Tap" setting).
-- Measure tools, edit text / insert image / link / crop, custom stamps and append/extract pages
-  currently show a "coming soon" toast, matching the prototype's preview-only behaviour.
+- Stamps come in two sections: static (APPROVED, ✓, ✗ …) and dynamic ({date}, {time}, {author}, {initials}
+  filled in when placed). You can create either kind in the gallery and long-press a stamp to pin it to a
+  Favorites tab. Stamps sit at the same -2° tilt as their preview, on screen and in the appearance stream.
+- Cloud, arrow and callout previews show the real shape while dragging (the callout shows its arrow, leader and
+  empty box). Polylines are placed point by point: tap to add a vertex, tap the last one to finish, tap the first
+  to close.
+- Measure tools, edit text / insert image / link / crop and append/extract pages currently show a "coming soon"
+  toast, matching the prototype's preview-only behaviour.

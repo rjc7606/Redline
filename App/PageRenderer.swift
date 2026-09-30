@@ -327,7 +327,7 @@ enum PageRenderer {
 
     static func drawStamp(_ s: Stroke, in ctx: GraphicsContext, dim: Bool, glow: Bool, accent: Color) {
         let c = Color(hex: s.color)
-        let text = Text(s.text ?? "").font(.system(size: 17 * s.scale, weight: .bold)).tracking(2 * s.scale).foregroundStyle(c)
+        let text = Text(s.text ?? "").font(Font(RedlineFonts.page(size: 17 * s.scale, weight: .bold) as CTFont)).tracking(2 * s.scale).foregroundStyle(c)
         let resolved = ctx.resolve(text)
         let size = resolved.measure(in: CGSize(width: 800, height: 200))
         let box = CGRect(x: -size.width / 2 - 14 * s.scale, y: -size.height / 2 - 5 * s.scale, width: size.width + 28 * s.scale, height: size.height + 10 * s.scale)

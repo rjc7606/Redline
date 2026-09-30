@@ -59,6 +59,45 @@ struct ToolButton: View {
     }
 }
 
+/// A specific stamp pinned to a Favorites tab: tap arms the Stamps tool with it; tap again deselects.
+struct StampPinButton: View {
+    @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
+    var editor: WorkspaceModel
+    var stamp: StampDef
+    var editIndex: Int? = nil
+
+    var body: some View {
+        let on = editor.tool == .stamps && editor.stamp.id == stamp.id
+        let c = Color(hex: stamp.color)
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous).fill(on ? theme.hov2 : .clear)
+            if on { RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(c, lineWidth: 2) }
+            Text(stamp.isMark ? stamp.text : stamp.resolved(author: app.author))
+                .font(fnt(stamp.isMark ? 16 : 7.5, .bold)).foregroundStyle(c).lineLimit(stamp.isMark ? 1 : 2).minimumScaleFactor(0.6)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 3).padding(.vertical, 2)
+                .overlay(RoundedRectangle(cornerRadius: 3).stroke(c, lineWidth: 1.5))
+                .rotationEffect(.degrees(-2))
+                .frame(width: 30, height: 30)
+        }
+        .frame(width: Metrics.toolButton, height: Metrics.toolButton)
+        .frame(width: Metrics.toolHit, height: Metrics.toolHit)
+        .contentShape(Rectangle())
+        .onTapGesture { if on { editor.tool = .none; editor.popover = nil; editor.presetsTool = nil } else { editor.useStamp(stamp) } }
+        .overlay(alignment: .topTrailing) {
+            if let i = editIndex {
+                Button { editor.removePin(at: i) } label: {
+                    Image(systemName: "xmark").font(fnt(8, .bold)).foregroundStyle(.white).frame(width: 15, height: 15)
+                        .background(Circle().fill(theme.danger)).shadow(color: .black.opacity(0.25), radius: 1.5, y: 1)
+                }.buttonStyle(.plain).offset(x: 2, y: 2)
+            }
+        }
+        .accessibilityLabel("Stamp \(stamp.text)")
+        .help(stamp.text)
+    }
+}
+
 /// Dropdown under the active tool: the 4 presets, or the full Style Popover after a long-press on one.
 struct PresetsDropdown: View {
     @Environment(\.theme) private var theme
@@ -232,7 +271,10 @@ struct MarkupToolStrip: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: Metrics.toolGap) {
                     ForEach(Array(editor.stripTools.enumerated()), id: \.offset) { i, t in
-                        ToolButton(editor: editor, tool: t, editIndex: editMode ? i : nil)
+                        Group {
+                            if let s = editor.pinnedStamp(at: i) { StampPinButton(editor: editor, stamp: s, editIndex: editMode ? i : nil) }
+                            else { ToolButton(editor: editor, tool: t, editIndex: editMode ? i : nil) }
+                        }
                             .contextMenu {
                                 if editor.onFavoritesTab {
                                     if i > 0 { Button("Move left") { editor.movePin(from: i, to: i - 1) } }

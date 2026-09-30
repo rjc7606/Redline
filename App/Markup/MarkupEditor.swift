@@ -71,6 +71,18 @@ final class MarkupState {
     @ObservationIgnored var styleSnapshotTaken = false
     @ObservationIgnored var eraseSnapshotTaken = false
     @ObservationIgnored var pendingTextEdit: PDFAnnotation? = nil
+    /// Snapshot taken when a text edit starts (undo for the whole edit).
+    @ObservationIgnored var textEditSnapshot: AnnotationSnapshot? = nil
+    /// A tap that only closed the inline text editor places nothing.
+    @ObservationIgnored var swallowTap = false
+    /// Keyboard height overlapping the PDF view (popup placement).
+    var keyboardOverlap: CGFloat = 0
+    /// Polyline being placed point by point.
+    var polyPoints: [CGPoint] = []
+    var polyPage: PDFPage? = nil
+    /// Eraser outline while erasing (page space).
+    var eraserPoint: CGPoint? = nil
+    var eraserPage: PDFPage? = nil
 
     var selectedPrimary: PDFAnnotation? { selected.first { $0.isPrimary } ?? selected.first }
     var pageCount: Int { pdf?.pageCount ?? 0 }
@@ -85,8 +97,7 @@ extension WorkspaceModel {
 
     func mkLoad() {
         guard type == .markup, let f = doc.pdfFile else { return }
-        mk.pdf = app.pdf.document(f)
-        if let pdf = mk.pdf { AppearancePatcher.adoptTextBoxes(in: pdf) }
+        mk.pdf = app.pdf.document(f)   // rendered exactly as saved; nothing is rewritten on load
     }
 
     func mkMarkDirty() {
@@ -107,7 +118,7 @@ extension WorkspaceModel {
         if pdf.write(to: url) {
             // PDFKit can't write appearance streams: attach ours for text boxes in an incremental update.
             var textBoxes: [PDFAnnotation] = []
-            for i in 0..<pdf.pageCount { if let p = pdf.page(at: i) { textBoxes += p.annotations.filter { $0.isRedlineTextBox } } }
+            for i in 0..<pdf.pageCount { if let p = pdf.page(at: i) { textBoxes += p.annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || WidgetRenderer.wantsAppearance($0) } } }
             AppearancePatcher.patch(fileURL: url, annotations: textBoxes)
             app.pdf.invalidateImages(f)
             app.patch(docID) { $0.modified = Date() }
@@ -172,8 +183,57 @@ extension WorkspaceModel {
         return page.annotations.filter { ($0.value(forAnnotationKey: .redlineGroup) as? String) == gid }
     }
 
+    /// Our own hit test (PDFKit's ignores grouped children and uses loose bounds): topmost annotation under `p`,
+    /// and for Ink the index of the path that was actually touched.
+    func mkAnnotation(at p: CGPoint, page: PDFPage) -> (annotation: PDFAnnotation, pathIndex: Int?)? {
+        let z = mkZoom
+        for a in page.annotations.reversed() where !a.isLink && !a.isPopup && !a.isReply && !a.isStateAnnotation {
+            if a.subtype == "Ink" {
+                let tol = Double((a.border?.lineWidth ?? 2) / 2 + 8 / z)
+                let q = Point(p.x, p.y)
+                for (i, path) in AnnotationFactory.inkPaths(a).enumerated() {
+                    if path.count == 1, hypot(path[0].x - p.x, path[0].y - p.y) <= tol { return (a, i) }
+                    for k in 1..<max(1, path.count) where Hit.distance(q, toSegment: Point(path[k - 1].x, path[k - 1].y), Point(path[k].x, path[k].y)) <= tol { return (a, i) }
+                }
+            } else if a.subtype == "Polygon" {
+                if Hit.polygon(a.polygonVertices.map { Point($0.x, $0.y) }, contains: Point(p.x, p.y)) { return (a, nil) }
+            } else if a.bounds.insetBy(dx: -4 / z, dy: -4 / z).contains(p) {
+                return (a, nil)
+            }
+        }
+        return nil
+    }
+
+    /// Selects what's under `p`. With `splitStrokes`, one stroke of a multi-stroke pen annotation is pulled out
+    /// into its own annotation and selected alone (so it can be moved by itself).
+    @discardableResult
+    func mkSelectHit(at p: CGPoint, page: PDFPage, splitStrokes: Bool) -> Bool {
+        guard let hit = mkAnnotation(at: p, page: page) else { return false }
+        let a = hit.annotation
+        if splitStrokes, let idx = hit.pathIndex, a.subtype == "Ink", a.redlineTool.isPen || a.redlineTool == .signature,
+           AnnotationFactory.inkPaths(a).count > 1 {
+            let single = mkExtractPaths([idx], from: a, page: page)
+            mkSelect(single, on: page)
+        } else {
+            mkSelect(a, on: page)
+        }
+        return true
+    }
+
+    /// Moves the given paths of an Ink annotation into a new annotation with the same style (undoable).
+    func mkExtractPaths(_ indices: [Int], from a: PDFAnnotation, page: PDFPage) -> PDFAnnotation {
+        let all = AnnotationFactory.inkPaths(a)
+        let taken = indices.compactMap { all.indices.contains($0) ? all[$0] : nil }
+        let kept = all.enumerated().filter { !indices.contains($0.offset) }.map(\.element)
+        let new = AnnotationFactory.ink(paths: taken, tool: a.redlineTool, style: WorkspaceModel.preset(of: a), author: (a.userName ?? "").isEmpty ? app.author : a.userName!)
+        mkPerform(.change(annots: [(a, AnnotationSnapshot(a))]), alreadyApplied: true)
+        AnnotationFactory.setInkPaths(a, kept)
+        mkPerform(.add(page: page, annots: [new]))
+        return new
+    }
+
     func mkSelect(_ a: PDFAnnotation, on page: PDFPage) {
-        mk.selected = mkGroup(of: a, on: page)
+        mk.selected = AppearancePatcher.promote(mkGroup(of: a, on: page), on: page)
         mk.annotationPopup = false
         mk.annotationProps = false
         mk.replyFieldOpen = false
@@ -254,11 +314,7 @@ extension WorkspaceModel {
         a.modificationDate = Date()
         if a.redlineTool.isTextual, let page = a.page {
             // Text boxes: the text is what's drawn, so refit the box and redraw its appearance.
-            let font = a.font ?? UIFont.systemFont(ofSize: 16)
-            let size = TextBoxRenderer.fittingSize(text: text.isEmpty ? " " : text, font: font)
-            let b = a.bounds
-            a.bounds = CGRect(x: b.minX, y: b.maxY - size.height, width: max(60, size.width), height: size.height)
-            a.dropAppearance()
+            mkFitTextBox(a, text: text)
             if a.redlineTool == .callout { mkRelayoutLeader(for: a, on: page) }
             mk.renderTick += 1
         }
@@ -300,7 +356,7 @@ extension WorkspaceModel {
             if al > 0.01 { p.background = PDFColors.hex(a.color); p.backgroundOpacity = Double(al) } else { p.background = "#FFFFFF"; p.backgroundOpacity = 0 }
             if let f = a.font {
                 let system = UIFont.systemFont(ofSize: 10).familyName
-                p.font = f.familyName == system ? nil : f.fontName
+                p.font = (f.familyName == system || f.familyName.hasPrefix(RedlineFonts.family)) ? nil : f.familyName
                 p.fontWeight = f.fontDescriptor.symbolicTraits.contains(.traitBold) || f.fontName.lowercased().contains("bold") ? .bold : .semibold
             }
         }
@@ -461,10 +517,25 @@ extension WorkspaceModel {
     func mkPointerDown(_ s: PointerSample, page: PDFPage, at p: CGPoint) {
         let i = mk.index(of: page)
         if i != pageIndex { pageIndex = i; mk.activeInk = nil; mk.activeInkRoot = nil }
+        let wasEditing = mk.textEdit != nil
         mkCommitTextEdit()
         closePopovers()
         mkDragMoved = false
+        mk.swallowTap = false
         let info = tool.info
+        if wasEditing {
+            // Tapping outside the inline editor only closes it.
+            mkClearSelection(); selectedField = nil
+            mk.swallowTap = true
+            mkDrag = .pan
+            return
+        }
+        // A finger on something already selected moves it (any tool) instead of panning.
+        if !s.isPencil, !mk.selected.isEmpty, let a = mkAnnotation(at: p, page: page)?.annotation, mk.selected.contains(where: { $0 === a }) {
+            mkDrag = .move(start: p, snaps: mk.selected.map { ($0, AnnotationSnapshot($0)) })
+            mk.pendingTextEdit = (a.subtype == "FreeText") ? a : nil
+            return
+        }
         if info.kind != .select && info.kind != .lasso { mkClearSelection(); selectedField = nil }
         // Finger on the ruler: move / rotate / lock. The Pencil passes through.
         if !s.isPencil, let hit = mkRulerHit(p) {
@@ -485,12 +556,12 @@ extension WorkspaceModel {
         }
         switch info.kind {
         case .select, .lasso:
-            if let a = page.annotation(at: p), !a.isLink, !a.isPopup {
+            if let a = mkAnnotation(at: p, page: page)?.annotation {
                 if mk.selected.contains(where: { $0 === a }) {
                     mkDrag = .move(start: p, snaps: mk.selected.map { ($0, AnnotationSnapshot($0)) })
                     mk.pendingTextEdit = (a.subtype == "FreeText") ? a : nil
                 } else {
-                    mkSelect(a, on: page)
+                    mkSelectHit(at: p, page: page, splitStrokes: true)
                     mkDrag = nil
                 }
             } else {
@@ -499,6 +570,7 @@ extension WorkspaceModel {
                 mk.renderTick += 1
             }
         case .ink, .highlight, .textMarkup, .shape:
+            if tool == .polyline { mkDrag = .polyTap(start: p); return }
             let st = style(for: tool)
             var color = PDFColors.uiColor(st.color)
             if tool == .redact { color = .black }
@@ -518,7 +590,9 @@ extension WorkspaceModel {
         case .eraser:
             mk.eraseSnapshotTaken = false
             mkDrag = .erase
+            mk.eraserPoint = p; mk.eraserPage = page
             mkEraseAt(p, page: page)
+            mk.renderTick += 1
         default:
             mkDrag = .draw   // tap tools finish on up
         }
@@ -573,14 +647,36 @@ extension WorkspaceModel {
         case .move(let start, let snaps):
             let dx = p.x - start.x, dy = p.y - start.y
             if !mkDragMoved { if hypot(dx, dy) < 2 / mkZoom { return }; mkDragMoved = true; mkPerform(.change(annots: snaps), alreadyApplied: true) }
-            for (a, snap) in snaps { a.bounds = snap.bounds.offsetBy(dx: dx, dy: dy) }
+            for (a, snap) in snaps {
+                a.bounds = snap.bounds.offsetBy(dx: dx, dy: dy)
+                if let vs = snap.vertices { a.polygonVertices = vs.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }; a.dropAppearance() }
+            }
             mkMarkDirty()
         case .resize(let center, let d0, let snaps):
             if !mkDragMoved { mkDragMoved = true; mkPerform(.change(annots: snaps), alreadyApplied: true) }
+            if snaps.count == 1, let first = snaps.first, first.0.subtype == "FreeText" {
+                // Text box: the bottom-right corner sets width and height; the text keeps its size and rewraps.
+                let a = first.0, b = first.1.bounds
+                let font = a.font ?? RedlineFonts.page(size: 16, weight: nil)
+                let w = max(40, p.x - b.minX)
+                let need = TextBoxRenderer.fittingSize(text: a.contents ?? "", font: font, maxWidth: w).height
+                let h = max(need, b.maxY - p.y)
+                a.bounds = CGRect(x: b.minX, y: b.maxY - h, width: w, height: h)
+                a.isManuallySized = true
+                a.dropAppearance()
+                if a.redlineTool == .callout { mkRelayoutLeader(for: a, on: page) }
+                mkMarkDirty()
+                return
+            }
             let f = max(0.05, hypot(p.x - center.x, p.y - center.y) / d0)
             for (a, snap) in snaps {
                 if a.subtype == "Ink", let paths = snap.paths {
                     AnnotationFactory.setInkPaths(a, paths.map { $0.map { CGPoint(x: center.x + ($0.x - center.x) * f, y: center.y + ($0.y - center.y) * f) } })
+                } else if let vs = snap.vertices {
+                    let b = snap.bounds
+                    a.bounds = CGRect(x: center.x + (b.minX - center.x) * f, y: center.y + (b.minY - center.y) * f, width: b.width * f, height: b.height * f)
+                    a.polygonVertices = vs.map { CGPoint(x: center.x + ($0.x - center.x) * f, y: center.y + ($0.y - center.y) * f) }
+                    a.dropAppearance()
                 } else {
                     let b = snap.bounds
                     a.bounds = CGRect(x: center.x + (b.minX - center.x) * f, y: center.y + (b.minY - center.y) * f, width: b.width * f, height: b.height * f)
@@ -593,7 +689,9 @@ extension WorkspaceModel {
             if !mkDragMoved { mkDragMoved = true; mkPerform(.change(annots: [(leader, snap)]), alreadyApplied: true) }
             mkMoveLeaderPoint(leader, index: index, to: p)
         case .erase:
+            mk.eraserPoint = p; mk.eraserPage = page
             mkEraseAt(p, page: page)
+            mk.renderTick += 1
         case .rulerMove(let start, let base):
             mkDragMoved = true
             ruler.x = base.x + (p.x - start.x); ruler.y = base.y + (p.y - start.y)
@@ -609,12 +707,15 @@ extension WorkspaceModel {
             mk.renderTick += 1
         case .rulerTap, .pan:
             break
+        case .polyTap(let start):
+            if hypot(p.x - start.x, p.y - start.y) > 6 / mkZoom { mkDragMoved = true }
         }
     }
 
     func mkPointerUp(_ s: PointerSample, page: PDFPage, at p: CGPoint) {
         guard let d = mkDrag else { return }
         mkDrag = nil
+        if mk.eraserPoint != nil { mk.eraserPoint = nil; mk.eraserPage = nil; mk.renderTick += 1 }
         switch d {
         case .draw:
             if let live = mk.live {
@@ -628,13 +729,24 @@ extension WorkspaceModel {
             let poly = mk.lasso, rect = mk.marquee
             mk.lasso = []; mk.marquee = nil; mk.lassoPage = nil
             if mkDragMoved {
-                let hits = page.annotations.filter { a in
-                    guard a.isPrimary, !a.isWidget else { return false }
-                    let c = CGPoint(x: a.bounds.midX, y: a.bounds.midY)
-                    if mkLassoMode { return poly.count >= 3 && Hit.polygon(poly.map { Point($0.x, $0.y) }, contains: Point(c.x, c.y)) }
+                let polyPts = poly.map { Point($0.x, $0.y) }
+                func inside(_ c: CGPoint) -> Bool {
+                    if mkLassoMode { return poly.count >= 3 && Hit.polygon(polyPts, contains: Point(c.x, c.y)) }
                     return rect?.contains(c) ?? false
                 }
-                mk.selected = hits.flatMap { mkGroup(of: $0, on: page) }
+                var hits: [PDFAnnotation] = []
+                for a in page.annotations where a.isPrimary && !a.isWidget {
+                    if a.subtype == "Ink", a.redlineTool.isPen || a.redlineTool == .signature {
+                        // Stroke by stroke: strokes inside the lasso come out of the annotation and are selected alone.
+                        let paths = AnnotationFactory.inkPaths(a)
+                        let idx = paths.indices.filter { i in paths[i].count > 0 && inside(paths[i][paths[i].count / 2]) }
+                        if idx.isEmpty { continue }
+                        if idx.count == paths.count { hits.append(a) } else { hits.append(mkExtractPaths(idx, from: a, page: page)) }
+                    } else if inside(CGPoint(x: a.bounds.midX, y: a.bounds.midY)) {
+                        hits.append(a)
+                    }
+                }
+                mk.selected = hits.flatMap { AppearancePatcher.promote(mkGroup(of: $0, on: page), on: page) }
                 mk.annotationPopup = false
                 if !hits.isEmpty { app.flash("\(hits.count) selected") }
             } else {
@@ -654,13 +766,15 @@ extension WorkspaceModel {
             toggleRulerLock(); mk.renderTick += 1
         case .rulerMove, .rulerRotate:
             break
+        case .polyTap:
+            if !mkDragMoved { mkPolyAddPoint(p, page: page) }
         case .pan:
             if !mkDragMoved {
+                if mk.swallowTap { mk.swallowTap = false; return }
+                // A clean tap on an annotation selects it, whatever tool is active.
+                if mkSelectHit(at: p, page: page, splitStrokes: false) { return }
                 if tool.info.isTap || tool.kind == .fill { mkTap(at: p, page: page) }
-                else if tool == .none {
-                    // Baseline: a clean tap selects the annotation under it (or clears the selection).
-                    if let a = page.annotation(at: p), !a.isLink, !a.isPopup { mkSelect(a, on: page) } else { mkClearSelection() }
-                }
+                else if tool == .none { mkClearSelection() }
             }
         }
     }
@@ -668,6 +782,7 @@ extension WorkspaceModel {
     func mkPointerCancel() {
         mkDrag = nil
         mk.live = nil
+        mk.eraserPoint = nil; mk.eraserPage = nil
         mk.lasso = []; mk.marquee = nil; mk.lassoPage = nil
         mk.renderTick += 1
     }
@@ -745,29 +860,17 @@ extension WorkspaceModel {
             guard live.points.count >= 2 else { return }
             let a = live.points[0], b = live.points[live.points.count - 1]
             let rect = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))
-            if rect.width < 2 && rect.height < 2 && live.tool != .polyline && live.tool != .polygon { return }
+            if rect.width < 2 && rect.height < 2 { return }
             var annots: [PDFAnnotation] = []
             switch live.tool {
             case .rect, .ellipse: annots = [AnnotationFactory.shape(rect: rect, tool: live.tool, style: st, author: author)]
             case .redact: annots = [AnnotationFactory.redaction(rect: rect, author: author)]
             case .line, .arrow, .dblarrow: annots = [AnnotationFactory.line(from: a, to: b, tool: live.tool, style: st, author: author)]
-            case .polyline, .polygon:
-                var pts = Hit.simplify(live.points.map { Point($0.x, $0.y) }, tolerance: 4).map { CGPoint(x: $0.x, y: $0.y) }
-                if live.tool == .polygon, let f = pts.first { pts.append(f) }
-                annots = [AnnotationFactory.ink(paths: [pts], tool: live.tool, style: st, author: author)]
             case .cloud:
-                let r = Rect(x: rect.minX, y: rect.minY, w: rect.width, h: rect.height)
-                let pts = MarkupGeometry.flatten(StrokeGeometry.cloud(r, radius: max(6, min(r.w, r.h) / 8)))
-                annots = [AnnotationFactory.ink(paths: [pts], tool: live.tool, style: st, author: author)]
+                annots = [AnnotationFactory.ink(paths: [MarkupGeometry.cloudPoints(rect)], tool: live.tool, style: st, author: author)]
             case .callout:
-                let text = ""
-                let fs = CGFloat(10 + st.width)
-                let box = CGRect(x: b.x, y: b.y - fs * 1.6, width: 130, height: fs * 1.6 + 8)
-                let left = a.x < box.midX
-                let elbow = CGPoint(x: left ? box.minX - 28 : box.maxX + 28, y: box.midY)
-                let attach = CGPoint(x: left ? box.minX : box.maxX, y: box.midY)
-                var tb = style(for: .textbox); tb.color = st.color; tb.borderColor = st.color
-                let pair = AnnotationFactory.callout(tip: a, elbow: elbow, attach: attach, box: box, text: text, style: tb, author: author)
+                let L = mkCalloutLayout(tip: a, at: b, style: st)
+                let pair = AnnotationFactory.callout(tip: a, elbow: L.elbow, attach: L.attach, box: L.box, text: "", style: L.textStyle, author: author)
                 annots = [pair.leader, pair.box]
                 mkPerform(.add(page: page, annots: annots))
                 mk.selected = annots
@@ -804,12 +907,13 @@ extension WorkspaceModel {
         case .text:
             let st = style(for: .textbox)
             let fs = CGFloat(10 + st.width)
-            let a = AnnotationFactory.freeText(rect: CGRect(x: p.x, y: p.y - fs * 1.6, width: 140, height: fs * 1.6 + 8), text: "", tool: .textbox, style: st, author: author)
+            let empty = TextBoxRenderer.fittingSize(text: "", font: AnnotationFactory.fontFor(st, size: fs))
+            let a = AnnotationFactory.freeText(rect: CGRect(x: p.x, y: p.y - empty.height, width: max(60, empty.width), height: empty.height), text: "", tool: .textbox, style: st, author: author)
             mkPerform(.add(page: page, annots: [a]))
             mk.selected = [a]
             mkBeginTextEdit(a, page: page, isNew: true)
         case .stampGallery:
-            mkPerform(.add(page: page, annots: [AnnotationFactory.stampText(center: p, text: stampText, colorHex: stampColor, author: author, tool: .stamps)]))
+            mkPerform(.add(page: page, annots: [AnnotationFactory.stampText(center: p, text: stamp.resolved(author: author), colorHex: stamp.color, author: author, tool: .stamps)]))
         case .stampPreset:
             let text = tool == .datestamp ? "RECEIVED \(Formatting.shortDate(Date()))" : Avatar.initials(app.author) + "."
             mkPerform(.add(page: page, annots: [AnnotationFactory.stampText(center: p, text: text, colorHex: info.stampColor ?? "#FF3B30", author: author, tool: tool)]))
@@ -823,14 +927,33 @@ extension WorkspaceModel {
             tool = .select
         case .fill:
             let st = style(for: .fill)
-            if let a = page.annotations.last(where: { ($0.subtype == "Square" || $0.subtype == "Circle") && $0.bounds.contains(p) }) {
+            let alpha = st.opacity ?? 0.5
+            // Rectangles / ellipses: their own interior colour. Closed outlines (clouds, closed polylines, pen loops):
+            // a grouped fill polygon drawn beneath them. Text boxes, stamps and notes are never filled.
+            if let a = page.annotations.last(where: { ($0.subtype == "Square" || $0.subtype == "Circle") && $0.redlineTool != .redact && $0.bounds.contains(p) }) {
                 mkPerform(.change(annots: [(a, AnnotationSnapshot(a))]), alreadyApplied: true)
-                a.interiorColor = PDFColors.uiColor(st.color, alpha: st.opacity ?? 0.5)
+                a.interiorColor = PDFColors.uiColor(st.color, alpha: alpha)
                 a.dropAppearance()
                 mkMarkDirty()
                 app.flash("Filled")
+            } else if let closed = mkClosedOutline(at: p, page: page) {
+                let ink = closed.0, outline = closed.1
+                if let fill = mkGroup(of: ink, on: page).first(where: { $0.subtype == "Polygon" && $0.redlineTool == .fill }) {
+                    mkPerform(.change(annots: [(fill, AnnotationSnapshot(fill))]), alreadyApplied: true)
+                    fill.interiorColor = PDFColors.uiColor(st.color); fill.color = fill.interiorColor ?? fill.color
+                    fill.opacityValue = alpha
+                    fill.dropAppearance()
+                    mkMarkDirty()
+                } else {
+                    let fill = AnnotationFactory.fillPolygon(points: outline, colorHex: st.color, alpha: alpha, root: ink, author: author)
+                    mkPerform(.add(page: page, annots: [fill]))
+                    // Keep the outline on top of its fill.
+                    page.removeAnnotation(ink); page.addAnnotation(ink)
+                    mkMarkDirty()
+                }
+                app.flash("Filled")
             } else {
-                app.flash("Tap inside a rectangle or ellipse")
+                app.flash("Tap inside a shape, a cloud or a closed line")
             }
         default:
             break
@@ -839,9 +962,47 @@ extension WorkspaceModel {
 
     // MARK: erase (partial, ink only)
 
+    /// The fill of the selected annotation: its own interior colour (rectangle / ellipse) or the grouped fill polygon.
+    var mkSelectedFill: (annotation: PDFAnnotation, isPolygon: Bool)? {
+        guard let a = mk.selectedPrimary, let page = a.page else { return nil }
+        if (a.subtype == "Square" || a.subtype == "Circle"), a.interiorColor != nil, a.redlineTool != .redact { return (a, false) }
+        if let fill = mkGroup(of: a, on: page).first(where: { $0.subtype == "Polygon" && $0.redlineTool == .fill }) { return (fill, true) }
+        return nil
+    }
+
+    /// Removes the fill from the selected annotation (undoable); the outline stays.
+    func mkRemoveFill() {
+        guard let f = mkSelectedFill, let page = f.annotation.page else { return }
+        if f.isPolygon {
+            mkPerform(.remove(page: page, annots: [f.annotation]))
+            mk.selected.removeAll { $0 === f.annotation }
+        } else {
+            mkPerform(.change(annots: [(f.annotation, AnnotationSnapshot(f.annotation))]), alreadyApplied: true)
+            f.annotation.interiorColor = nil
+            f.annotation.dropAppearance()
+        }
+        mkMarkDirty()
+        app.flash("Fill removed")
+    }
+
+    /// The topmost closed Ink outline (cloud, closed polyline, pen loop) containing `p`, with its outline points.
+    private func mkClosedOutline(at p: CGPoint, page: PDFPage) -> (PDFAnnotation, [CGPoint])? {
+        for a in page.annotations.reversed() where a.subtype == "Ink" && a.isPrimary && a.redlineTool != .callout && a.redlineTool != .arrow && a.redlineTool != .dblarrow {
+            guard a.bounds.contains(p) else { continue }
+            for path in AnnotationFactory.inkPaths(a) where path.count >= 3 {
+                let f = path[0], l = path[path.count - 1]
+                let span = max(a.bounds.width, a.bounds.height)
+                let closed = a.redlineTool == .cloud || hypot(f.x - l.x, f.y - l.y) <= max(6, span * 0.12)
+                if closed, Hit.polygon(path.map { Point($0.x, $0.y) }, contains: Point(p.x, p.y)) { return (a, path) }
+            }
+        }
+        return nil
+    }
+
     private func mkEraseAt(_ p: CGPoint, page: PDFPage) {
         let r = CGFloat(max(2, style(for: .eraser).width / 2))
-        let inks = page.annotations.filter { $0.subtype == "Ink" && $0.redlineTool != .callout && $0.bounds.insetBy(dx: -r, dy: -r).contains(p) }
+        // Only pen ink is erasable; shapes, arrows, clouds and callout leaders stay whole.
+        let inks = page.annotations.filter { $0.subtype == "Ink" && ($0.redlineTool.isPen || $0.redlineTool == .signature) && $0.bounds.insetBy(dx: -r, dy: -r).contains(p) }
         var changed: [(PDFAnnotation, AnnotationSnapshot)] = []
         var removed: [PDFAnnotation] = []
         for a in inks {
@@ -881,13 +1042,86 @@ extension WorkspaceModel {
     func mkBeginTextEdit(_ a: PDFAnnotation, page: PDFPage, isNew: Bool) {
         mkCommitTextEdit()
         mk.textDraft = a.contents ?? ""
+        mk.textEditSnapshot = isNew ? nil : AnnotationSnapshot(a)
         mk.textEdit = PDFTextEdit(annotation: a, page: page, isNew: isNew)
         mk.annotationPopup = false
+        a.shouldDisplay = false   // the inline editor draws the box while typing
+        mk.renderTick += 1
+    }
+
+    /// Called on every keystroke: the box follows the text (width too, unless the user sized it).
+    func mkLiveTextChanged() {
+        guard let te = mk.textEdit else { return }
+        te.annotation.contents = mk.textDraft
+        mkFitTextBox(te.annotation, text: mk.textDraft)
+        if te.annotation.redlineTool == .callout { mkRelayoutLeader(for: te.annotation, on: te.page) }
+        mk.renderTick += 1
+    }
+
+    /// Fits a text box to its text: free boxes grow in both directions; corner-sized boxes keep their width.
+    func mkFitTextBox(_ a: PDFAnnotation, text: String) {
+        let font = a.font ?? RedlineFonts.page(size: 16, weight: nil)
+        let b = a.bounds
+        if a.isManuallySized {
+            let need = TextBoxRenderer.fittingSize(text: text, font: font, maxWidth: b.width).height
+            let h = max(b.height, need)
+            a.bounds = CGRect(x: b.minX, y: b.maxY - h, width: b.width, height: h)
+        } else {
+            var size = TextBoxRenderer.fittingSize(text: text, font: font)
+            size.width = max(60, size.width)
+            if a.rotationDegrees != 0 {
+                // Stamps: keep the tilt; the bounds grow around the same centre.
+                let outer = TextBoxRenderer.outerSize(inner: size, rotation: a.rotationDegrees)
+                a.bounds = CGRect(x: b.midX - outer.width / 2, y: b.midY - outer.height / 2, width: outer.width, height: outer.height)
+            } else {
+                a.bounds = CGRect(x: b.minX, y: b.maxY - size.height, width: size.width, height: size.height)
+            }
+        }
+        a.dropAppearance()
+    }
+
+    // MARK: polyline (tap to place vertices)
+
+    func mkPolyAddPoint(_ p: CGPoint, page: PDFPage) {
+        if let pg = mk.polyPage, pg !== page { mkFinishPolyline() }
+        let tol = 14 / mkZoom
+        if let last = mk.polyPoints.last, hypot(last.x - p.x, last.y - p.y) <= tol { mkFinishPolyline(); return }   // tap the last point: done
+        if mk.polyPoints.count >= 2, let first = mk.polyPoints.first, hypot(first.x - p.x, first.y - p.y) <= tol {
+            mk.polyPoints.append(first); mkFinishPolyline(); return   // tap the first point: closed
+        }
+        mk.polyPage = page
+        mk.polyPoints.append(p)
+        mk.renderTick += 1
+        if mk.polyPoints.count == 1 { app.flash("Tap to add points · tap the last point to finish") }
+    }
+
+    func mkFinishPolyline() {
+        guard let page = mk.polyPage else { return }
+        let pts = mk.polyPoints
+        mk.polyPoints = []; mk.polyPage = nil
+        mk.renderTick += 1
+        guard pts.count >= 2 else { return }
+        mkPerform(.add(page: page, annots: [AnnotationFactory.ink(paths: [pts], tool: .polyline, style: style(for: .polyline), author: app.author)]))
+    }
+
+    // MARK: callout geometry (shared by the live preview and the commit)
+
+    /// Where the box, elbow and attach point go for a callout whose arrow tip is `tip` and whose box corner is at `b`.
+    func mkCalloutLayout(tip a: CGPoint, at b: CGPoint, style st: StylePreset) -> (box: CGRect, elbow: CGPoint, attach: CGPoint, textStyle: StylePreset) {
+        var tb = style(for: .textbox); tb.color = st.color; tb.borderColor = st.color
+        let fs = CGFloat(10 + st.width)
+        let empty = TextBoxRenderer.fittingSize(text: "", font: AnnotationFactory.fontFor(tb, size: fs))
+        let box = CGRect(x: b.x, y: b.y - empty.height, width: max(60, empty.width), height: empty.height)
+        let left = a.x < box.midX
+        let elbow = CGPoint(x: left ? box.minX - 28 : box.maxX + 28, y: box.midY)
+        let attach = CGPoint(x: left ? box.minX : box.maxX, y: box.midY)
+        return (box, elbow, attach, tb)
     }
 
     func mkCommitTextEdit() {
         guard let te = mk.textEdit else { return }
         mk.textEdit = nil
+        te.annotation.shouldDisplay = true
         let txt = mk.textDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         if txt.isEmpty {
             var all = mkGroup(of: te.annotation, on: te.page)
@@ -903,15 +1137,11 @@ extension WorkspaceModel {
             mkMarkDirty()
             return
         }
-        if !te.isNew { mkPerform(.change(annots: [(te.annotation, AnnotationSnapshot(te.annotation))]), alreadyApplied: true) }
+        if !te.isNew, let snap = mk.textEditSnapshot { mkPerform(.change(annots: [(te.annotation, snap)]), alreadyApplied: true) }
+        mk.textEditSnapshot = nil
         te.annotation.contents = txt
-        // Grow the box to fit the text.
-        let font = te.annotation.font ?? UIFont.systemFont(ofSize: 16)
-        let size = TextBoxRenderer.fittingSize(text: txt, font: font)
-        let b = te.annotation.bounds
-        te.annotation.bounds = CGRect(x: b.minX, y: b.maxY - size.height, width: max(60, size.width), height: size.height)
+        mkFitTextBox(te.annotation, text: txt)
         te.annotation.modificationDate = Date()
-        te.annotation.dropAppearance()
         if te.annotation.redlineTool == .callout { mkRelayoutLeader(for: te.annotation, on: te.page) }
         mkMarkDirty()
     }
@@ -968,6 +1198,12 @@ extension WorkspaceModel {
 }
 
 enum MarkupGeometry {
+    /// Revision cloud outline (page space) around a rectangle.
+    static func cloudPoints(_ rect: CGRect) -> [CGPoint] {
+        let r = Rect(x: rect.minX, y: rect.minY, w: rect.width, h: rect.height)
+        return flatten(StrokeGeometry.cloud(r, radius: max(6, min(r.w, r.h) / 8)))
+    }
+
     /// Flattens a PathData into a polyline (cubics sampled).
     static func flatten(_ path: PathData) -> [CGPoint] {
         var out: [CGPoint] = []
