@@ -179,7 +179,13 @@ struct OutlinePanel: View {
     @Environment(\.theme) private var theme
     var editor: WorkspaceModel
     @State private var reordering = false
+    @State private var editing: String? = nil
     @FocusState private var focused: String?
+
+    private func beginRename(_ id: String) {
+        editing = id
+        Task { @MainActor in focused = id }   // after the field exists
+    }
 
     var body: some View {
         let _ = editor.mk.renderTick
@@ -219,12 +225,12 @@ struct OutlinePanel: View {
             HStack(spacing: 8) {
                 SecondaryButton(label: "Add", symbol: "plus") {
                     reordering = false
-                    if let o = editor.mkOutlineAdd() { focused = ObjectIdentifier(o).debugDescription }
+                    if let o = editor.mkOutlineAdd() { beginRename(ObjectIdentifier(o).debugDescription) }
                 }
                 .disabled(!editor.isPDF)
                 Spacer(minLength: 0)
                 SecondaryButton(label: reordering ? "Done" : "Reorder", symbol: reordering ? "checkmark" : "arrow.up.arrow.down", tint: reordering ? theme.accent : nil) {
-                    focused = nil
+                    editing = nil; focused = nil
                     withAnimation(.easeOut(duration: 0.15)) { reordering.toggle() }
                 }
                 .disabled(items.count < 2 && !reordering)
@@ -234,7 +240,8 @@ struct OutlinePanel: View {
         }
     }
 
-    /// One entry: chevron for branches, the name editable in place, the page; tap elsewhere on the row to go there.
+    /// One entry: chevron for branches, the name, the page. Tap goes to the page; Rename (long-press menu, or a
+    /// just-added entry) swaps the name for an in-place field until you submit or tap away.
     private func row(_ o: OutlineItem) -> some View {
         HStack(spacing: 6) {
             if let node = o.node, o.hasChildren {
@@ -246,15 +253,17 @@ struct OutlinePanel: View {
             } else {
                 Color.clear.frame(width: 18, height: 18)
             }
-            if let node = o.node {
+            if let node = o.node, editing == o.id {
                 TextField("Title", text: Binding(get: { node.label ?? "" }, set: { editor.mkOutlineRename(node, to: $0) }))
                     .textFieldStyle(.plain)
                     .font(fnt(o.depth == 0 ? 14 : 13, o.depth == 0 ? .semibold : .medium))
                     .foregroundStyle(o.depth == 0 ? theme.ink1 : theme.ink2)
                     .focused($focused, equals: o.id)
-                    .onSubmit { focused = nil }
+                    .onSubmit { editing = nil; focused = nil }
+                    .onChange(of: focused) { _, f in if f != o.id { editing = nil } }
             } else {
-                Text(o.label).font(fnt(14, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+                Text(o.label).font(fnt(o.depth == 0 ? 14 : 13, o.depth == 0 ? .semibold : .medium))
+                    .foregroundStyle(o.depth == 0 ? theme.ink1 : theme.ink2).lineLimit(1)
             }
             Spacer(minLength: 4)
             Button { focused = nil; editor.setPage(o.pageIndex) } label: {
@@ -265,13 +274,14 @@ struct OutlinePanel: View {
         .padding(.trailing, 4)
         .padding(.leading, 6 + Double(o.depth) * 16)
         .frame(height: o.depth == 0 ? 44 : 36)
-        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(focused == o.id ? theme.card : (o.pageIndex == editor.pageIndex && o.depth == 0 ? theme.hov2 : .clear)))
-        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(theme.accent, lineWidth: focused == o.id ? 1.5 : 0))
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(editing == o.id ? theme.card : (o.pageIndex == editor.pageIndex && o.depth == 0 ? theme.hov2 : .clear)))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(theme.accent, lineWidth: editing == o.id ? 1.5 : 0))
         .contentShape(Rectangle())
-        .onTapGesture { focused = nil; editor.setPage(o.pageIndex) }
+        .onTapGesture { if editing != o.id { editing = nil; focused = nil; editor.setPage(o.pageIndex) } }
         .contextMenu {
             if let node = o.node {
-                Button("Add child entry", systemImage: "arrow.turn.down.right") { if let c = editor.mkOutlineAdd(asChildOf: node) { focused = ObjectIdentifier(c).debugDescription } }
+                Button("Rename", systemImage: "pencil") { beginRename(o.id) }
+                Button("Add child entry", systemImage: "arrow.turn.down.right") { if let c = editor.mkOutlineAdd(asChildOf: node) { beginRename(ObjectIdentifier(c).debugDescription) } }
                 Button("Indent", systemImage: "increase.indent") { editor.mkOutlineIndent(node) }
                 Button("Outdent", systemImage: "decrease.indent") { editor.mkOutlineOutdent(node) }
                 Divider()
