@@ -86,6 +86,8 @@ final class MarkupState {
     @ObservationIgnored var swallowTap = false
     /// Keyboard height overlapping the PDF view (popup placement).
     var keyboardOverlap: CGFloat = 0
+    /// Outline entries the user collapsed in the sidebar.
+    var collapsedOutline: Set<String> = []
     /// Polyline being placed point by point.
     var polyPoints: [CGPoint] = []
     var polyPage: PDFPage? = nil

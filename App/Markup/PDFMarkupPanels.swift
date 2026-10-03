@@ -319,50 +319,112 @@ struct PDFOrganizePages: View {
     @Environment(\.theme) private var theme
     var editor: WorkspaceModel
     @State private var selected: Int? = nil
+    @State private var dragging: Int? = nil        // index (in the real order) of the tile being dragged
+    @State private var target: Int? = nil          // where it would land
+    @State private var dragPoint: CGPoint = .zero  // finger, in grid space
+    @State private var tileFrames = TileFrameStore()
 
     var body: some View {
         let tick = editor.mk.renderTick
         let count = editor.mk.pageCount
-        // Keyed by the page object, so deleting, inserting, duplicating or reordering updates the right tile.
         let pages: [PDFPage] = (0..<count).compactMap { editor.mk.page($0) }
         let sel = min(selected ?? editor.pageIndex, max(0, count - 1))
+        // While dragging, show the order the drop would produce; the tiles slide into place.
+        let order: [Int] = {
+            var o = Array(0..<count)
+            if let d = dragging, let t = target, d != t, o.indices.contains(d) {
+                o.remove(at: d); o.insert(d, at: min(t, o.count))
+            }
+            return o
+        }()
         VStack(spacing: 0) {
             HStack {
                 Text("Organize Pages").font(titleFnt(21)).foregroundStyle(theme.ink1)
                 Spacer()
                 PrimaryButton(label: "Done", height: 32) { editor.organizeOpen = false }
             }
-            .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 4)
-            Text("Tap a page to select it, tap again to open · drag to reorder").font(fnt(12)).foregroundStyle(theme.ink4).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 4)
+            .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 12)
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 160), spacing: 24, alignment: .top)], alignment: .leading, spacing: 24) {
-                    ForEach(Array(pages.enumerated()), id: \.element) { i, page in
-                        VStack(spacing: 8) {
-                            PDFPageThumb(page: page, tick: tick).frame(width: 160)
-                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(i == sel ? theme.accent : .clear, lineWidth: 2).padding(-3))
-                                .contentShape(Rectangle())
-                                .onTapGesture { if sel == i { editor.setPage(i); editor.organizeOpen = false } else { selected = i } }
-                                .draggable(String(i))
-                                .dropDestination(for: String.self) { items, _ in
-                                    guard let s = items.first, let from = Int(s) else { return false }
-                                    editor.mkMovePage(from: from, to: i)
-                                    return true
-                                }
-                            Text("Page \(i + 1)").font(fnt(12, .semibold)).foregroundStyle(theme.ink3)
-                            if i == sel {
-                                OrganizeActionPill(rotate: { editor.mkRotatePage(i) }, duplicate: { editor.mkDuplicatePage(i) }, delete: { editor.mkDeletePage(i); selected = nil })
-                            }
+                    ForEach(order, id: \.self) { i in
+                        if pages.indices.contains(i) {
+                            tile(i, page: pages[i], sel: sel, tick: tick, isDragging: dragging == i)
+                                .background(GeometryReader { g in
+                                    Color.clear.preference(key: TileFrameKey.self, value: [i: g.frame(in: .named("organize"))])
+                                })
                         }
                     }
                     Button { editor.mkInsertBlankPage(after: count - 1) } label: {
                         BlankPageTile(aspect: 0.77)
                     }.buttonStyle(.plain)
                 }
+                .animation(.easeInOut(duration: 0.18), value: order)
                 .padding(.horizontal, 24).padding(.vertical, 16)
+            }
+            .coordinateSpace(name: "organize")
+            .onPreferenceChange(TileFrameKey.self) { [tileFrames] frames in tileFrames.map = frames }
+            .overlay(alignment: .topLeading) {
+                // The lifted tile follows the finger.
+                if let d = dragging, pages.indices.contains(d) {
+                    PDFPageThumb(page: pages[d], tick: tick).frame(width: 160)
+                        .shadow(color: .black.opacity(0.3), radius: 12, y: 6)
+                        .offset(x: dragPoint.x - 80, y: dragPoint.y - 40)
+                        .allowsHitTesting(false)
+                }
             }
         }
         .background(theme.bg2)
     }
+
+    private func tile(_ i: Int, page: PDFPage, sel: Int, tick: Int, isDragging: Bool) -> some View {
+        let bookmarked = editor.doc.bookmarks.contains("page:\(i)")
+        return VStack(spacing: 8) {
+            PDFPageThumb(page: page, tick: tick).frame(width: 160)
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(i == sel ? theme.accent : .clear, lineWidth: 2).padding(-3))
+                .overlay(alignment: .topTrailing) {
+                    if bookmarked {
+                        Image(systemName: "bookmark.fill").font(fnt(13, .semibold)).foregroundStyle(theme.accent)
+                            .padding(6).background(Circle().fill(theme.card)).shadow(color: .black.opacity(0.15), radius: 2, y: 1)
+                            .padding(6)
+                    }
+                }
+                .opacity(isDragging ? 0.25 : 1)
+                .contentShape(Rectangle())
+                .onTapGesture { if sel == i { editor.setPage(i); editor.organizeOpen = false } else { selected = i } }
+                .gesture(
+                    LongPressGesture(minimumDuration: 0.25)
+                        .sequenced(before: DragGesture(minimumDistance: 4, coordinateSpace: .named("organize")))
+                        .onChanged { value in
+                            guard case .second(true, let drag?) = value else { return }
+                            dragging = i
+                            dragPoint = drag.location
+                            selected = i
+                            // Target = the slot whose tile is nearest the finger.
+                            if let nearest = tileFrames.map.min(by: { dist($0.value, drag.location) < dist($1.value, drag.location) }) { target = nearest.key }
+                        }
+                        .onEnded { _ in
+                            if let d = dragging, let t = target, d != t { editor.mkMovePage(from: d, to: t); selected = t }
+                            dragging = nil; target = nil
+                        }
+                )
+            Text("Page \(i + 1)").font(fnt(12, .semibold)).foregroundStyle(theme.ink3)
+            if i == sel && dragging == nil {
+                OrganizeActionPill(rotate: { editor.mkRotatePage(i) }, duplicate: { editor.mkDuplicatePage(i) }, delete: { editor.mkDeletePage(i); selected = nil })
+            }
+        }
+    }
+
+    private func dist(_ r: CGRect, _ p: CGPoint) -> CGFloat { hypot(r.midX - p.x, r.midY - p.y) }
+}
+
+/// Tile frames reported by the grid (written from the preference callback, read by the drag gesture; main thread).
+final class TileFrameStore: @unchecked Sendable {
+    var map: [Int: CGRect] = [:]
+}
+
+struct TileFrameKey: PreferenceKey {
+    static let defaultValue: [Int: CGRect] = [:]
+    static func reduce(value: inout [Int: CGRect], nextValue: () -> [Int: CGRect]) { value.merge(nextValue()) { $1 } }
 }
 
 /// Rotate · duplicate · delete, 36 tall, radius 10, `pop`.

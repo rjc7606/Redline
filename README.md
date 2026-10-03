@@ -107,6 +107,9 @@ swift test
   bounce along any axis where the content is larger than the view (a page that fits stays put), finger pinch-zoom; the Pencil
   never scrolls. Zoomed-out pages are centred with the larger margins that leaves.
 - PDF pages render on a background queue; a neutral placeholder shows until each page image is ready.
+- Organize Pages: drag a tile (press, then move) and the others slide aside to show where it will land;
+  bookmarked pages carry a bookmark badge. The Outline tab edits the PDF's own outline: add entries for the
+  current page, rename, nest (indent / outdent), reorder, re-point and delete, with collapsible branches.
 - The eraser cuts only the touched part out of pen ink (shapes, arrows, clouds and leaders stay whole) and shows
   its outline while erasing; its four presets are sizes. One eraser drag is one undo step, however many strokes it
   cut or removed. Double-tap-to-zoom is off on the PDF (pinch zooms), so quick Pencil taps never zoom.
