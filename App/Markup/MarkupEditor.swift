@@ -1222,9 +1222,40 @@ extension WorkspaceModel {
         return dy < 0 ? .bottom : .top
     }
 
-    /// Attach point = midpoint of the facing side; elbow = that point pushed `distance` straight out from the side.
-    func mkCalloutGeometry(box: CGRect, tip: CGPoint, distance d: CGFloat) -> (attach: CGPoint, elbow: CGPoint, side: CalloutSide) {
-        let side = mkCalloutSide(box: box, tip: tip)
+    /// How far outside the box a point lies on a given side (negative = not on that side).
+    func mkOutward(_ p: CGPoint, of box: CGRect, side: CalloutSide) -> CGFloat {
+        switch side {
+        case .left: return box.minX - p.x
+        case .right: return p.x - box.maxX
+        case .top: return p.y - box.maxY
+        case .bottom: return box.minY - p.y
+        }
+    }
+
+    /// The side a dragged elbow is being pulled toward: the one it is furthest outside of.
+    func mkNearestSide(_ p: CGPoint, of box: CGRect, fallback: CalloutSide) -> CalloutSide {
+        let sides: [CalloutSide] = [.left, .right, .top, .bottom]
+        let best = sides.max { mkOutward(p, of: box, side: $0) < mkOutward(p, of: box, side: $1) } ?? fallback
+        return mkOutward(p, of: box, side: best) > 0 ? best : fallback
+    }
+
+    /// The elbow's side as stored on the leader (set when the user drags it), if any.
+    func mkStoredSide(_ leader: PDFAnnotation) -> CalloutSide? {
+        switch (leader.value(forAnnotationKey: .redlineSide) as? String) ?? "" {
+        case "L": return .left; case "R": return .right; case "T": return .top; case "B": return .bottom
+        default: return nil
+        }
+    }
+    func mkStoreSide(_ side: CalloutSide?, on leader: PDFAnnotation) {
+        guard let side else { leader.removeValue(forAnnotationKey: .redlineSide); return }
+        let s: String
+        switch side { case .left: s = "L"; case .right: s = "R"; case .top: s = "T"; case .bottom: s = "B" }
+        leader.setValue(NSString(string: s), forAnnotationKey: .redlineSide)
+    }
+
+    /// Attach point = midpoint of the chosen (or facing) side; elbow = that point pushed `distance` straight out.
+    func mkCalloutGeometry(box: CGRect, tip: CGPoint, distance d: CGFloat, side chosen: CalloutSide? = nil) -> (attach: CGPoint, elbow: CGPoint, side: CalloutSide) {
+        let side = chosen ?? mkCalloutSide(box: box, tip: tip)
         let dd = max(10, d)
         switch side {
         case .left: return (CGPoint(x: box.minX, y: box.midY), CGPoint(x: box.minX - dd, y: box.midY), side)
@@ -1286,13 +1317,16 @@ extension WorkspaceModel {
         AnnotationFactory.setInkPaths(leader, [[attach, elbow, tip], [h1, tip, h2]])
     }
 
-    /// Re-lays the leader around its fixed tip: the elbow jumps to whichever side now faces the tip, keeping its distance.
+    /// Re-lays the leader around its fixed tip, keeping the elbow's distance. A side the user chose is kept while
+    /// the tip is still out on that side; otherwise the elbow moves to the side that faces the tip.
     func mkRelayoutLeader(for box: PDFAnnotation, on page: PDFPage) {
         guard let leader = mkLeader(for: box, on: page) else { return }
         let pts = mkLeaderPoints(leader)
         guard pts.count >= 3 else { return }
         let d = hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
-        let g = mkCalloutGeometry(box: box.bounds, tip: pts[2], distance: d)
+        var side = mkStoredSide(leader)
+        if let s = side, mkOutward(pts[2], of: box.bounds, side: s) <= 0 { side = nil; mkStoreSide(nil, on: leader) }
+        let g = mkCalloutGeometry(box: box.bounds, tip: pts[2], distance: d, side: side)
         mkSetLeader(leader, tip: pts[2], elbow: g.elbow, attach: g.attach)
     }
 
@@ -1308,15 +1342,11 @@ extension WorkspaceModel {
             let g = mkCalloutGeometry(box: b, tip: p, distance: d)
             mkSetLeader(leader, tip: p, elbow: g.elbow, attach: g.attach)
         } else {
-            let side = mkCalloutSide(box: b, tip: pts[2])
-            let d: CGFloat
-            switch side {
-            case .left: d = b.minX - p.x
-            case .right: d = p.x - b.maxX
-            case .top: d = p.y - b.maxY
-            case .bottom: d = b.minY - p.y
-            }
-            let g = mkCalloutGeometry(box: b, tip: pts[2], distance: d)
+            // Drag the elbow to any side; on that side it only slides straight out (horizontal on L/R, vertical on T/B).
+            let current = mkStoredSide(leader) ?? mkCalloutSide(box: b, tip: pts[2])
+            let side = mkNearestSide(p, of: b, fallback: current)
+            mkStoreSide(side, on: leader)
+            let g = mkCalloutGeometry(box: b, tip: pts[2], distance: mkOutward(p, of: b, side: side), side: side)
             mkSetLeader(leader, tip: pts[2], elbow: g.elbow, attach: g.attach)
         }
         mkMarkDirty()

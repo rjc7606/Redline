@@ -258,19 +258,20 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
 
     private func pageAndPoint(for location: CGPoint) -> (PDFPage, CGPoint)? {
         guard let v = pdfView else { return nil }
-        let vp = convert(location, to: v)
+        let vp = v.visible(fromBounds: convert(location, to: v))
         guard let page = dragPage ?? v.page(for: vp, nearest: true) else { return nil }
         return (page, v.convert(vp, to: page))
     }
 
     private func overlayPoint(_ p: CGPoint, on page: PDFPage) -> CGPoint {
         guard let v = pdfView else { return .zero }
-        return v.convert(v.convert(p, from: page), to: self)
+        return v.convert(v.boundsPoint(fromVisible: v.convert(p, from: page)), to: self)
     }
 
     private func overlayRect(_ r: CGRect, on page: PDFPage) -> CGRect {
-        guard let v = pdfView else { return .zero }
-        return v.convert(v.convert(r, from: page), to: self)
+        let pts = [r.origin, CGPoint(x: r.maxX, y: r.minY), CGPoint(x: r.minX, y: r.maxY), CGPoint(x: r.maxX, y: r.maxY)].map { overlayPoint($0, on: page) }
+        let xs = pts.map(\.x), ys = pts.map(\.y)
+        return CGRect(x: xs.min() ?? 0, y: ys.min() ?? 0, width: (xs.max() ?? 0) - (xs.min() ?? 0), height: (ys.max() ?? 0) - (ys.min() ?? 0))
     }
 
     /// Page units → overlay units, measured through the same conversion the points use (during a pinch the document

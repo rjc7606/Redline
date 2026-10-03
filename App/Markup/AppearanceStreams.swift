@@ -14,6 +14,8 @@ extension PDFAnnotationKey {
     static let redlineSized = PDFAnnotationKey(rawValue: "/RedlineSized")
     /// Tilt in degrees (stamps sit at -2°, like their preview).
     static let redlineRotation = PDFAnnotationKey(rawValue: "/RedlineRotation")
+    /// Callout leader: the side of the box the user put the elbow on (L R T B); absent = face the tip.
+    static let redlineSide = PDFAnnotationKey(rawValue: "/RedlineSide")
     /// Standard PDF polygon vertices (x y x y …, page space).
     static let vertices = PDFAnnotationKey(rawValue: "/Vertices")
 }

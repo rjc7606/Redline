@@ -183,10 +183,16 @@ final class PDFStackView: UIScrollView, UIScrollViewDelegate {
         return i >= 0 && i < frames.count ? i : nil
     }
 
-    /// Page under a point in this view's coordinates (nearest page when between pages).
+    // A scroll view's own coordinate space scrolls with the content (bounds.origin == contentOffset). The page
+    // conversions below use *visible* coordinates instead — (0,0) at the top-left of what's on screen — which is
+    // what PDFView's did and what the SwiftUI overlays (popup, inline editor, selection bar) position with.
+    func visible(fromBounds p: CGPoint) -> CGPoint { CGPoint(x: p.x - bounds.minX, y: p.y - bounds.minY) }
+    func boundsPoint(fromVisible p: CGPoint) -> CGPoint { CGPoint(x: p.x + bounds.minX, y: p.y + bounds.minY) }
+
+    /// Page under a point in visible coordinates (nearest page when between pages).
     func page(for point: CGPoint, nearest: Bool) -> PDFPage? {
         guard let doc = document, !frames.isEmpty else { return nil }
-        let d = documentView.convert(point, from: self)
+        let d = documentView.convert(boundsPoint(fromVisible: point), from: self)
         if let i = frames.firstIndex(where: { $0.contains(d) }) { return doc.page(at: i) }
         guard nearest else { return nil }
         var best = 0, dist = CGFloat.infinity
@@ -199,17 +205,17 @@ final class PDFStackView: UIScrollView, UIScrollViewDelegate {
         return doc.page(at: best)
     }
 
-    /// Page space (PDF user space, y up) → this view.
+    /// Page space (PDF user space, y up) → visible coordinates.
     func convert(_ p: CGPoint, from page: PDFPage) -> CGPoint {
         guard let i = index(of: page) else { return .zero }
         let d = p.applying(PDFService.pageToDisplay(page))
-        return convert(CGPoint(x: frames[i].minX + d.x * baseScale, y: frames[i].minY + d.y * baseScale), from: documentView)
+        return visible(fromBounds: convert(CGPoint(x: frames[i].minX + d.x * baseScale, y: frames[i].minY + d.y * baseScale), from: documentView))
     }
 
-    /// This view → page space.
+    /// Visible coordinates → page space.
     func convert(_ p: CGPoint, to page: PDFPage) -> CGPoint {
         guard let i = index(of: page) else { return p }
-        let dv = documentView.convert(p, from: self)
+        let dv = documentView.convert(boundsPoint(fromVisible: p), from: self)
         let d = CGPoint(x: (dv.x - frames[i].minX) / baseScale, y: (dv.y - frames[i].minY) / baseScale)
         return d.applying(PDFService.pageToDisplay(page).inverted())
     }

@@ -123,8 +123,9 @@ swift test
   Favorites tab. Stamps sit at the same -2° tilt as their preview, on screen and in the appearance stream.
 - Cloud, arrow and callout previews show the real shape while dragging (the callout shows its arrow, leader and
   empty box). A callout's elbow sits on the midpoint of whichever side of the box faces the arrow tip and only slides
-  straight out from that side; dragging the box moves the box alone with the tip fixed (the elbow switches sides as
-  needed), dragging the leader moves the whole callout, and the tip handle re-aims the arrow. Polylines are placed point by point: tap to add a vertex, tap the last one to finish, tap the first
+  straight out from that side; drag it past the box to put it on another side. Dragging the box moves the box alone
+  with the tip fixed (a side you chose is kept while the tip is still out on that side, otherwise the elbow faces the
+  tip), dragging the leader moves the whole callout, and the tip handle re-aims the arrow. Polylines are placed point by point: tap to add a vertex, tap the last one to finish, tap the first
   to close.
 - Measure tools, edit text / insert image / link / crop and append/extract pages currently show a "coming soon"
   toast, matching the prototype's preview-only behaviour.
