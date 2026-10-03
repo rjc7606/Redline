@@ -530,8 +530,7 @@ extension WorkspaceModel {
                 cg.saveGState()
                 cg.translateBy(x: 0, y: size.height)
                 cg.scaleBy(x: 1, y: -1)
-                page.draw(with: .mediaBox, to: cg)
-                PDFDraw.annotations(of: page, in: cg)
+                PDFDraw.page(page, in: cg)
                 cg.restoreGState()
             }
         }

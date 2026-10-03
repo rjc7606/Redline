@@ -10,11 +10,26 @@ struct RenderablePage: @unchecked Sendable {
 /// Drawing helpers shared by the viewer, thumbnails and exports (not main-actor bound: tiles and the render
 /// queue draw on background threads).
 enum PDFDraw {
-    /// Draws a page's annotations into a context set up the way `PDFPage.draw(with:to:)` expects (display box,
-    /// y up). Pages shown in the viewer have `displaysAnnotations` off, so their annotations are drawn here; pages
-    /// that still draw their own are left alone (no double draw).
+    /// Page content only, through Core Graphics: `PDFPage.draw(with:to:)` always paints the annotations with
+    /// PDFKit's own look (solid markers, per-segment opacity), so Redline never uses it. The context is the display
+    /// box, y up; PDFKit's page transform applies the rotation.
+    static func content(of page: PDFPage, in cg: CGContext) {
+        guard let ref = page.pageRef else { return }
+        cg.saveGState()
+        cg.concatenate(page.transform(for: .mediaBox))
+        cg.drawPDFPage(ref)
+        cg.restoreGState()
+    }
+
+    /// Page content plus annotations (thumbnails, exports).
+    static func page(_ page: PDFPage, in cg: CGContext) {
+        content(of: page, in: cg)
+        annotations(of: page, in: cg)
+    }
+
+    /// Draws a page's annotations into a context set up like `content(of:in:)` (display box, y up): foreign ones
+    /// through PDFKit from their appearance streams, Redline's own through their drawing subclasses.
     static func annotations(of page: PDFPage, in cg: CGContext) {
-        guard !page.displaysAnnotations else { return }
         cg.saveGState()
         cg.concatenate(page.transform(for: .mediaBox))
         for a in page.annotations where a.shouldDisplay && !a.isPopup {
@@ -39,8 +54,7 @@ enum PDFDraw {
             cg.translateBy(x: 0, y: disp.height)
             cg.scaleBy(x: 1, y: -1)
             cg.interpolationQuality = .high
-            page.draw(with: .mediaBox, to: cg)
-            annotations(of: page, in: cg)
+            self.page(page, in: cg)
             cg.restoreGState()
         }
     }
@@ -64,8 +78,7 @@ actor PDFRenderQueue {
             cg.translateBy(x: 0, y: disp.height)
             cg.scaleBy(x: 1, y: -1)
             cg.interpolationQuality = .high
-            wrapped.page.draw(with: .mediaBox, to: cg)
-            PDFDraw.annotations(of: wrapped.page, in: cg)
+            PDFDraw.page(wrapped.page, in: cg)
             cg.restoreGState()
         }
     }

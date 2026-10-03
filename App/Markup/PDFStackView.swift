@@ -73,7 +73,6 @@ final class PDFStackView: UIScrollView, UIScrollViewDelegate {
         guard let doc = document else { contentSize = .zero; return }
         for i in 0..<doc.pageCount {
             guard let page = doc.page(at: i) else { continue }
-            page.displaysAnnotations = false   // tiles draw page content only; annotations are drawn live below
             let tile = PDFPageTileView(page: page)
             let ann = PDFAnnotationsView(page: page)
             documentView.insertSubview(tile, at: 0)
@@ -92,6 +91,9 @@ final class PDFStackView: UIScrollView, UIScrollViewDelegate {
         let m = PDFStackView.margin
         var y = m
         frames = []
+        // Frames change synchronously and without implicit animation, so a tile never shows at its old size.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         for (i, s) in sizes.enumerated() {
             let w = s.width * baseScale, h = s.height * baseScale
             let f = CGRect(x: m + (maxW * baseScale - w) / 2, y: y, width: w, height: h)
@@ -99,6 +101,7 @@ final class PDFStackView: UIScrollView, UIScrollViewDelegate {
             if tiles.indices.contains(i) { tiles[i].frame = f; tiles[i].scale = baseScale; annotationViews[i].frame = f; annotationViews[i].scale = baseScale }
             y += h + PDFStackView.gap
         }
+        CATransaction.commit()
         let size = CGSize(width: maxW * baseScale + 2 * m, height: y - PDFStackView.gap + m)
         documentView.frame = CGRect(origin: .zero, size: size)
         contentSize = size
@@ -264,8 +267,18 @@ final class PDFStackView: UIScrollView, UIScrollViewDelegate {
 final class PDFPageTileView: UIView {
     let page: PDFPage
     var scale: CGFloat = 1 { didSet { if scale != oldValue { refresh() } } }
-    private let tiled = CATiledLayer()
+    private let tiled = NoFadeTiledLayer()
     private let drawer: PDFPageTileDrawer
+
+    /// The tiled sublayer follows the frame immediately (not on the next layout pass), with no animation.
+    override var frame: CGRect {
+        didSet {
+            guard frame.size != oldValue.size else { return }
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            tiled.frame = bounds
+            CATransaction.commit()
+        }
+    }
 
     init(page: PDFPage) {
         self.page = page
@@ -287,7 +300,11 @@ final class PDFPageTileView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        tiled.frame = bounds
+        if tiled.frame != bounds {
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            tiled.frame = bounds
+            CATransaction.commit()
+        }
         drawer.scale = scale
     }
 
@@ -295,6 +312,11 @@ final class PDFPageTileView: UIView {
         drawer.scale = scale
         tiled.setNeedsDisplay()
     }
+}
+
+/// CATiledLayer fades new tiles in; that read as a flash after every zoom.
+final class NoFadeTiledLayer: CATiledLayer {
+    override class func fadeDuration() -> CFTimeInterval { 0 }
 }
 
 final class PDFPageTileDrawer: NSObject, CALayerDelegate, @unchecked Sendable {
@@ -310,7 +332,7 @@ final class PDFPageTileDrawer: NSObject, CALayerDelegate, @unchecked Sendable {
         ctx.translateBy(x: 0, y: b.height)
         ctx.scaleBy(x: scale, y: -scale)
         ctx.interpolationQuality = .high
-        page.draw(with: .mediaBox, to: ctx)   // annotations are off for stacked pages (drawn by PDFAnnotationsView)
+        PDFDraw.content(of: page, in: ctx)   // content only; PDFAnnotationsView draws the annotations
         ctx.restoreGState()
     }
 }

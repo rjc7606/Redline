@@ -128,8 +128,12 @@ struct PDFStackRepresentable: UIViewRepresentable {
     func updateUIView(_ v: PDFStackView, context: Context) {
         if v.document !== editor.mk.pdf { v.document = editor.mk.pdf }
         context.coordinator.editor = editor
-        v.syncPages()
-        v.refreshAnnotations()
+        // Annotation layers redraw only when annotations changed, not on every scroll tick.
+        if context.coordinator.lastTick != tick {
+            context.coordinator.lastTick = tick
+            v.syncPages()
+            v.refreshAnnotations()
+        }
         context.coordinator.overlay.setNeedsDisplay()
         if let i = editor.mk.scrollToPage { context.coordinator.scroll(to: i, in: v) }
     }
@@ -144,6 +148,7 @@ struct PDFStackRepresentable: UIViewRepresentable {
     final class Coordinator: NSObject {
         var editor: WorkspaceModel
         let overlay: MarkupOverlayView
+        var lastTick = -1
         private var pendingScroll: Int? = nil
         private var observers: [NSObjectProtocol] = []
 
