@@ -553,7 +553,11 @@ extension WorkspaceModel {
     }
 
     private enum RulerPart { case body, handle, lock }
-    private func mkRulerHit(_ p: CGPoint) -> RulerPart? {
+    /// A band this wide (screen points) just inside each long edge is drawing territory for an ink tool: a Pencil
+    /// that lands slightly on the ruler still draws along the edge instead of dragging the ruler away.
+    private var mkRulerEdgeBand: CGFloat { 14 / CGFloat(mkZoom) }
+
+    private func mkRulerHit(_ p: CGPoint, inkTool: Bool = false) -> RulerPart? {
         guard ruler.on else { return nil }
         let A = mkRulerAxes()
         let vx = p.x - A.c.x, vy = p.y - A.c.y
@@ -563,6 +567,7 @@ extension WorkspaceModel {
         let z = CGFloat(mkZoom)
         if abs(abs(along) - (halfL - 30 / z)) <= 22 / z && abs(across) <= 22 / z { return .handle }
         if abs(along) <= 72 / z && abs(across) <= 16 / z { return .lock }
+        if inkTool, abs(across) >= halfH - mkRulerEdgeBand { return nil }   // edge band: draw, don't move
         return .body
     }
 
@@ -612,7 +617,7 @@ extension WorkspaceModel {
         }
         if info.kind != .select && info.kind != .lasso { mkClearSelection(); selectedField = nil }
         // Finger or Pencil on the ruler: move / rotate / lock.
-        if let hit = mkRulerHit(p) {
+        if let hit = mkRulerHit(p, inkTool: info.kind == .ink) {
             switch hit {
             case .body: mkDrag = .rulerMove(start: p, base: CGPoint(x: ruler.x, y: ruler.y))
             case .handle: mkDrag = .rulerRotate(a0: atan2(-(p.y - ruler.y), p.x - ruler.x) * 180 / .pi, r0: ruler.angle)
@@ -658,7 +663,7 @@ extension WorkspaceModel {
                 let vx = p.x - A.c.x, vy = p.y - A.c.y
                 let along = vx * A.d.x + vy * A.d.y, across = vx * A.n.x + vy * A.n.y
                 if ruler.lock { mkDrawMode = .lock }
-                else if abs(along) <= mkRulerLength / 2, abs(across) >= mkRulerHeight / 2 - 2, abs(across) <= mkRulerHeight / 2 + 40 {
+                else if abs(along) <= mkRulerLength / 2, abs(across) >= mkRulerHeight / 2 - mkRulerEdgeBand, abs(across) <= mkRulerHeight / 2 + 40 {
                     mkDrawMode = .edge(offset: (across < 0 ? -1 : 1) * (mkRulerHeight / 2 + CGFloat(st.width) / 2 + 1), along0: along)
                 }
             }
