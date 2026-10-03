@@ -13,6 +13,8 @@ extension PDFAnnotationKey {
     static let calloutLine = PDFAnnotationKey(rawValue: "/CL")
     static let creationDate = PDFAnnotationKey(rawValue: "/CreationDate")
     static let opacity = PDFAnnotationKey(rawValue: "/CA")
+    /// Redline's own copy of the opacity: PDFKit does not reliably hand /CA back, which drew markers solid.
+    static let redlineOpacity = PDFAnnotationKey(rawValue: "/RedlineOpacity")
     static let redlineTool = PDFAnnotationKey(rawValue: "/RedlineTool")
     static let redlineGroup = PDFAnnotationKey(rawValue: "/RedlineGroup")
 }
@@ -55,8 +57,16 @@ extension PDFAnnotation {
     var stableID: String { ObjectIdentifier(self).debugDescription }
 
     var opacityValue: Double {
-        get { (value(forAnnotationKey: .opacity) as? NSNumber)?.doubleValue ?? 1 }
-        set { setValue(NSNumber(value: newValue), forAnnotationKey: .opacity) }
+        get {
+            if let n = value(forAnnotationKey: .redlineOpacity) as? NSNumber { return n.doubleValue }
+            if let n = value(forAnnotationKey: .opacity) as? NSNumber { return n.doubleValue }
+            if let s = value(forAnnotationKey: .opacity) as? String, let d = Double(s) { return d }
+            return 1
+        }
+        set {
+            setValue(NSNumber(value: newValue), forAnnotationKey: .opacity)          // the standard key, for other readers
+            setValue(NSNumber(value: newValue), forAnnotationKey: .redlineOpacity)   // the one Redline reads back
+        }
     }
 
     /// Forgets the stored appearance so PDFKit re-renders from the properties (used after an edit).

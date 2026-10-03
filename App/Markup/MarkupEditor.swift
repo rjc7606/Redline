@@ -594,6 +594,14 @@ extension WorkspaceModel {
             mkDrag = .pan
             return
         }
+        if mk.annotationPopup {
+            // Tapping outside the comment popup only closes it (no sticky note, stamp or text box gets placed).
+            mkClosePopup()
+            mk.swallowTap = true
+            mkDrag = .pan
+            mk.renderTick += 1
+            return
+        }
         // A finger on something already selected moves it (any tool) instead of panning.
         if !s.isPencil, !mk.selected.isEmpty, let a = mkAnnotation(at: p, page: page)?.annotation, mk.selected.contains(where: { $0 === a }) {
             let movable = mkMovableSelection
