@@ -846,6 +846,7 @@ extension WorkspaceModel {
             if !mkDragMoved {
                 if mk.swallowTap { mk.swallowTap = false; return }
                 // A clean tap on an annotation selects it, whatever tool is active.
+                if tool.kind == .fill, mkFillAt(p, page: page) { return }   // a bucket tap is always on top of something
                 if mkSelectHit(at: p, page: page, splitStrokes: false) { return }
                 if tool.info.isTap || tool.kind == .fill { mkTap(at: p, page: page) }
                 else if tool == .none { mkClearSelection() }
@@ -1002,35 +1003,7 @@ extension WorkspaceModel {
             mk.selected = [a]
             tool = .select
         case .fill:
-            let st = style(for: .fill)
-            let alpha = st.opacity ?? 0.5
-            // Rectangles / ellipses: their own interior colour. Closed outlines (clouds, closed polylines, pen loops):
-            // a grouped fill polygon drawn beneath them. Text boxes, stamps and notes are never filled.
-            if let a = page.annotations.last(where: { ($0.subtype == "Square" || $0.subtype == "Circle") && $0.redlineTool != .redact && $0.bounds.contains(p) }) {
-                mkPerform(.change(annots: [(a, AnnotationSnapshot(a))]), alreadyApplied: true)
-                a.interiorColor = PDFColors.uiColor(st.color, alpha: alpha)
-                a.dropAppearance()
-                mkMarkDirty()
-                app.flash("Filled")
-            } else if let closed = mkClosedOutline(at: p, page: page) {
-                let ink = closed.0, outline = closed.1
-                if let fill = mkGroup(of: ink, on: page).first(where: { $0.subtype == "Polygon" && $0.redlineTool == .fill }) {
-                    mkPerform(.change(annots: [(fill, AnnotationSnapshot(fill))]), alreadyApplied: true)
-                    fill.interiorColor = PDFColors.uiColor(st.color); fill.color = fill.interiorColor ?? fill.color
-                    fill.opacityValue = alpha
-                    fill.dropAppearance()
-                    mkMarkDirty()
-                } else {
-                    let fill = AnnotationFactory.fillPolygon(points: outline, colorHex: st.color, alpha: alpha, root: ink, author: author)
-                    mkPerform(.add(page: page, annots: [fill]))
-                    // Keep the outline on top of its fill.
-                    page.removeAnnotation(ink); page.addAnnotation(ink)
-                    mkMarkDirty()
-                }
-                app.flash("Filled")
-            } else {
-                app.flash("Tap inside a shape, a cloud or a closed line")
-            }
+            if !mkFillAt(p, page: page) { app.flash("Tap inside a shape, a cloud or a closed line") }
         default:
             break
         }
@@ -1059,6 +1032,41 @@ extension WorkspaceModel {
         }
         mkMarkDirty()
         app.flash("Fill removed")
+    }
+
+    /// Bucket: rectangles / ellipses take their own interior colour; closed outlines (clouds, closed polylines, pen
+    /// loops) get a grouped fill polygon drawn beneath them. Text boxes, stamps and notes are never filled.
+    /// Returns false when nothing fillable is under `p`.
+    @discardableResult
+    func mkFillAt(_ p: CGPoint, page: PDFPage) -> Bool {
+        let st = style(for: .fill)
+        let alpha = st.opacity ?? 0.5
+        let author = app.author
+        if let a = page.annotations.last(where: { ($0.subtype == "Square" || $0.subtype == "Circle") && $0.redlineTool != .redact && $0.bounds.contains(p) }) {
+            mkPerform(.change(annots: [(a, AnnotationSnapshot(a))]), alreadyApplied: true)
+            a.interiorColor = PDFColors.uiColor(st.color, alpha: alpha)
+            a.dropAppearance()
+            mkMarkDirty()
+            app.flash("Filled")
+            return true
+        }
+        guard let closed = mkClosedOutline(at: p, page: page) else { return false }
+        let ink = closed.0, outline = closed.1
+        if let fill = mkGroup(of: ink, on: page).first(where: { $0.subtype == "Polygon" && $0.redlineTool == .fill }) {
+            mkPerform(.change(annots: [(fill, AnnotationSnapshot(fill))]), alreadyApplied: true)
+            fill.interiorColor = PDFColors.uiColor(st.color); fill.color = fill.interiorColor ?? fill.color
+            fill.opacityValue = alpha
+            fill.dropAppearance()
+            mkMarkDirty()
+        } else {
+            let fill = AnnotationFactory.fillPolygon(points: outline, colorHex: st.color, alpha: alpha, root: ink, author: author)
+            mkPerform(.add(page: page, annots: [fill]))
+            // Keep the outline on top of its fill.
+            page.removeAnnotation(ink); page.addAnnotation(ink)
+            mkMarkDirty()
+        }
+        app.flash("Filled")
+        return true
     }
 
     /// The topmost closed Ink outline (cloud, closed polyline, pen loop) containing `p`, with its outline points.
