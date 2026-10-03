@@ -557,7 +557,7 @@ extension WorkspaceModel {
     private enum RulerPart { case body, handle, lock }
     /// A band this wide (screen points) just inside each long edge is drawing territory for an ink tool: a Pencil
     /// that lands slightly on the ruler still draws along the edge instead of dragging the ruler away.
-    private var mkRulerEdgeBand: CGFloat { 14 / CGFloat(mkZoom) }
+    private var mkRulerEdgeBand: CGFloat { 7 / CGFloat(mkZoom) }
 
     private func mkRulerHit(_ p: CGPoint, inkTool: Bool = false) -> RulerPart? {
         guard ruler.on else { return nil }
