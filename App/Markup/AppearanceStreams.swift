@@ -71,6 +71,8 @@ extension PDFAnnotation {
     var isRedlineLine: Bool { subtype == "Line" && redlineID != nil }
     /// A form field drawn with Redline's look.
     var isRedlineWidget: Bool { subtype == "Widget" && redlineID != nil }
+    /// A rectangle / ellipse drawn by Redline.
+    var isRedlineShape: Bool { (subtype == "Square" || subtype == "Circle") && redlineID != nil }
     /// Pen / marker ink drawn by Redline (PDFKit ignores an Ink annotation's opacity and doubles overlaps).
     var isRedlineInk: Bool { subtype == "Ink" && redlineID != nil }
     /// Highlight / underline / strikeout / squiggly drawn by Redline (PDFKit ignores their opacity).
@@ -146,7 +148,7 @@ enum InkRenderer {
         cg.setStrokeColor(a.color.cgColor)
         cg.setLineWidth(w)
         cg.setLineCap(.round); cg.setLineJoin(.round)
-        if a.border?.style == .dashed, let d = a.border?.dashPattern as? [NSNumber], !d.isEmpty { cg.setLineDash(phase: 0, lengths: d.map { CGFloat($0.doubleValue) }) }
+        if let d = AnnotationFactory.dashLengths(of: a.border) { cg.setLineDash(phase: 0, lengths: d) }
         for path in paths {
             guard let f = path.first else { continue }
             cg.move(to: CGPoint(x: f.x - origin.x, y: f.y - origin.y))
@@ -379,6 +381,48 @@ enum WidgetRenderer {
     }
 }
 
+/// Rectangle / ellipse drawn by Redline: real dotted borders, opacity, interior fill.
+final class RedlineShape: PDFAnnotation {
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        ShapeRenderer.draw(self, origin: .zero, in: context)
+    }
+}
+
+enum ShapeRenderer {
+    static func draw(_ a: PDFAnnotation, origin: CGPoint, in cg: CGContext) {
+        let w = max(0, a.border?.lineWidth ?? 1)
+        let r = a.bounds.offsetBy(dx: -origin.x, dy: -origin.y).insetBy(dx: w / 2, dy: w / 2)
+        let path = a.subtype == "Circle" ? UIBezierPath(ovalIn: r).cgPath : UIBezierPath(rect: r).cgPath
+        cg.saveGState()
+        cg.setAlpha(CGFloat(a.opacityValue))
+        if let ic = a.interiorColor {
+            var al: CGFloat = 1; ic.getWhite(nil, alpha: &al)
+            cg.setFillColor(ic.cgColor)
+            cg.addPath(path); cg.fillPath()
+            _ = al
+        }
+        if w > 0.05 {
+            cg.setStrokeColor(a.color.cgColor)
+            cg.setLineWidth(w); cg.setLineCap(.round); cg.setLineJoin(.round)
+            if let d = AnnotationFactory.dashLengths(of: a.border) { cg.setLineDash(phase: 0, lengths: d) }
+            cg.addPath(path); cg.strokePath()
+        }
+        cg.restoreGState()
+    }
+
+    static func appearancePDF(for a: PDFAnnotation) -> Data {
+        let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
+        let origin = a.bounds.origin
+        return UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+            c.beginPage()
+            let cg = c.cgContext
+            cg.translateBy(x: 0, y: size.height)
+            cg.scaleBy(x: 1, y: -1)
+            draw(a, origin: origin, in: cg)
+        }
+    }
+}
+
 /// Line / arrow drawn with round caps and joins (PDFKit's default draws them square).
 final class RedlineLine: PDFAnnotation {
     override func draw(with box: PDFDisplayBox, in context: CGContext) {
@@ -398,7 +442,7 @@ enum LineRenderer {
         cg.setStrokeColor(a.color.cgColor)
         cg.setLineWidth(w)
         cg.setLineCap(.round); cg.setLineJoin(.round)
-        if a.border?.style == .dashed, let d = a.border?.dashPattern as? [NSNumber], !d.isEmpty { cg.setLineDash(phase: 0, lengths: d.map { CGFloat($0.doubleValue) }) }
+        if let d = AnnotationFactory.dashLengths(of: a.border) { cg.setLineDash(phase: 0, lengths: d) }
         cg.move(to: p0); cg.addLine(to: p1); cg.strokePath()
         cg.setLineDash(phase: 0, lengths: [])
         let size = max(10, w * 4)
@@ -571,7 +615,7 @@ enum TextBoxRenderer {
 enum AppearancePatcher {
     @discardableResult
     static func patch(fileURL: URL, annotations: [PDFAnnotation]) -> Bool {
-        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || $0.isRedlineInk || WidgetRenderer.wantsAppearance($0) }
+        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || $0.isRedlineInk || $0.isRedlineShape || WidgetRenderer.wantsAppearance($0) }
         guard !ours.isEmpty, let data = try? Data(contentsOf: fileURL), let file = PDFFile(data: data) else { return ours.isEmpty }
         var byID: [String: (num: Int, dict: [String: PDFObj])] = [:]
         for page in file.pages() {
@@ -590,6 +634,7 @@ enum AppearancePatcher {
             else if a.isRedlineWidget { helperData = WidgetRenderer.appearancePDF(for: a) }
             else if a.isRedlineMarkup { helperData = MarkupRenderer.appearancePDF(for: a) }
             else if a.isRedlineInk { helperData = InkRenderer.appearancePDF(for: a) }
+            else if a.isRedlineShape { helperData = ShapeRenderer.appearancePDF(for: a) }
             else { helperData = TextBoxRenderer.appearancePDF(for: a) }
             guard let helper = PDFFile(data: helperData), let page = helper.pages().first else { continue }
             let importer = PDFObjectImporter(source: helper, firstFreeNumber: next)
@@ -639,7 +684,7 @@ enum AppearancePatcher {
         (a.isRedlineTextBox && !(a is RedlineFreeText)) || (a.isRedlineNote && !(a is RedlineNote))
             || (a.isRedlinePolygon && !(a is RedlinePolygon)) || (a.isRedlineLine && !(a is RedlineLine))
             || (a.isRedlineWidget && !(a is RedlineWidget)) || (a.isRedlineMarkup && !(a is RedlineMarkup))
-            || (a.isRedlineInk && !(a is RedlineInk))
+            || (a.isRedlineInk && !(a is RedlineInk)) || (a.isRedlineShape && !(a is RedlineShape))
     }
 
     /// Promotes a group of annotations in place: same page order, same keys (including /AP), replies re-pointed.
@@ -657,6 +702,7 @@ enum AppearancePatcher {
             else if a.isRedlineWidget { r = RedlineWidget(bounds: a.bounds, forType: .widget, withProperties: a.annotationKeyValues) }
             else if a.isRedlineMarkup { r = RedlineMarkup(bounds: a.bounds, forType: PDFAnnotationSubtype(rawValue: "/" + a.subtype), withProperties: a.annotationKeyValues) }
             else if a.isRedlineInk { r = RedlineInk(bounds: a.bounds, forType: .ink, withProperties: a.annotationKeyValues) }
+            else if a.isRedlineShape { r = RedlineShape(bounds: a.bounds, forType: a.subtype == "Circle" ? .circle : .square, withProperties: a.annotationKeyValues) }
             else { r = RedlineFreeText(bounds: a.bounds, forType: .freeText, withProperties: a.annotationKeyValues) }
             map[ObjectIdentifier(a)] = r
             page.addAnnotation(r)

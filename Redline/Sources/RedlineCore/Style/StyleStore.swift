@@ -22,6 +22,8 @@ public struct StylePreset: Codable, Sendable, Equatable, Hashable {
     // text
     public var font: String?
     public var fontWeight: TextWeight?
+    /// Revision cloud: "arcs" (default) or "straight" (a plain box outline you can select through).
+    public var cloudStyle: String?
 
     public init(color: String, width: Double, opacity: Double? = nil, lineStyle: LineStyle? = nil, pressure: Bool? = nil,
                 fill: String? = nil, fillPattern: FillPattern? = nil, fillOpacity: Double? = nil, background: String? = nil,

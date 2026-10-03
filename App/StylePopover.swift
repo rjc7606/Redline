@@ -157,7 +157,12 @@ struct StylePopoverView: View {
                     .padding(.top, 16)
             }
 
-            if (isShape && target == .color) || isLine {
+            if tool == .cloud && target == .color {
+                SectionLabel(text: "Border shape").padding(.top, 16).padding(.bottom, 8)
+                SegmentControl(options: [SegmentOption(value: "arcs", label: "Cloud"), SegmentOption(value: "straight", label: "Straight")],
+                               selection: Binding(get: { st.cloudStyle ?? "arcs" }, set: { v in set { $0.cloudStyle = v == "arcs" ? nil : v } }), fontSize: 12, vPad: 5, radius: 8, fill: true)
+            }
+            if (isShape && target == .color) || isLine || tool.isPen {
                 SectionLabel(text: isShape ? "Border style" : "Line style").padding(.top, 16).padding(.bottom, 8)
                 HStack(spacing: 8) {
                     ForEach(LineStyle.allCases, id: \.self) { ls in

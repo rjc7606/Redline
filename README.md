@@ -117,7 +117,9 @@ swift test
 - Select taps a single stroke: one stroke of a multi-stroke pen annotation is pulled out into its own annotation
   and selected alone, so it can be moved by itself; the lasso does the same for the strokes it encloses.
 - Lines and arrows stay standard Line annotations but are drawn with round caps and joins on screen and in their
-  appearance stream. The bucket fills rectangles and ellipses directly, and fills clouds, closed polylines and pen
+  appearance stream. Solid, dashed and dotted apply to pens, lines, arrows, rectangles, ellipses and clouds (dots
+  are round-capped tiny dashes, so other readers draw them too). A cloud's border can be arcs or straight; an
+  unfilled rectangle or ellipse is selected on its border only, so what's inside stays selectable. The bucket fills rectangles and ellipses directly, and fills clouds, closed polylines and pen
   loops with a fill polygon grouped under the outline (moves, resizes and deletes with it; never text boxes, stamps
   or notes). Properties in the popup, or the comment's long-press menu, can remove a fill.
 - Bucket fill works on shape-tool shapes and on pen strokes that close on themselves. Double-tapping an Apple Pencil switches

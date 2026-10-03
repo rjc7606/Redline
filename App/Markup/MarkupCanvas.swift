@@ -428,6 +428,11 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             } else {
                 cg.setStrokeColor(live.color.cgColor)
                 cg.setLineWidth(live.width * z)
+                switch editor.style(for: live.tool).lineStyle ?? .solid {
+                case .dash: cg.setLineDash(phase: 0, lengths: [live.width * 3 * z, live.width * 2 * z])
+                case .dot: cg.setLineDash(phase: 0, lengths: [0.01, live.width * 2.2 * z])
+                case .solid: break
+                }
                 let pts = live.points.map { overlayPoint($0, on: live.page) }
                 let p0 = live.points.first ?? .zero, p1 = live.points.last ?? p0
                 let pageRect = CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y), width: abs(p1.x - p0.x), height: abs(p1.y - p0.y))
@@ -440,7 +445,8 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                     case .cloud:
                         // The cloud as it will be committed.
                         if pageRect.width > 2 && pageRect.height > 2 {
-                            strokePolyline(cg, MarkupGeometry.cloudPoints(pageRect).map { overlayPoint($0, on: live.page) }, close: true)
+                            let straight = editor.style(for: .cloud).cloudStyle == "straight"
+                            strokePolyline(cg, MarkupGeometry.cloudPoints(pageRect, straight: straight).map { overlayPoint($0, on: live.page) }, close: true)
                         }
                     case .line, .arrow, .dblarrow:
                         let a = overlayPoint(p0, on: live.page), b = overlayPoint(p1, on: live.page)

@@ -88,6 +88,26 @@ enum PDFColors {
 // MARK: - Factories (page space, y up)
 
 enum AnnotationFactory {
+    /// Line style → PDF border. Dotted = tiny dashes with the gap sized to the width; round caps turn them into dots.
+    static func applyLineStyle(_ ls: LineStyle?, width w: CGFloat, to border: PDFBorder) {
+        switch ls ?? .solid {
+        case .solid: border.style = .solid
+        case .dash: border.style = .dashed; border.dashPattern = [NSNumber(value: Double(w) * 3), NSNumber(value: Double(w) * 2)]
+        case .dot: border.style = .dashed; border.dashPattern = [NSNumber(value: 0.01), NSNumber(value: Double(w) * 2.2)]
+        }
+    }
+    /// The line style a border encodes (a first dash under half a point means dotted).
+    static func lineStyle(of border: PDFBorder?) -> LineStyle {
+        guard let b = border, b.style == .dashed else { return .solid }
+        if let first = (b.dashPattern as? [NSNumber])?.first?.doubleValue, first < 0.5 { return .dot }
+        return .dash
+    }
+    /// CG dash lengths for a border, or nil when solid.
+    static func dashLengths(of border: PDFBorder?) -> [CGFloat]? {
+        guard let b = border, b.style == .dashed, let d = b.dashPattern as? [NSNumber], !d.isEmpty else { return nil }
+        return d.map { CGFloat($0.doubleValue) }
+    }
+
     private static func stamp(_ a: PDFAnnotation, tool: Tool, author: String, contents: String = "") {
         a.userName = author
         a.modificationDate = Date()
@@ -112,8 +132,7 @@ enum AnnotationFactory {
         a.color = PDFColors.uiColor(style.color)
         let border = PDFBorder()
         border.lineWidth = w
-        border.style = style.lineStyle == .dash ? .dashed : .solid
-        if style.lineStyle == .dash { border.dashPattern = [NSNumber(value: Double(w) * 3), NSNumber(value: Double(w) * 2)] }
+        applyLineStyle(style.lineStyle, width: w, to: border)
         a.border = border
         for p in paths { a.add(bezier(for: p, in: b)) }
         if let op = style.opacity, op < 1 { a.opacityValue = op }
@@ -201,12 +220,12 @@ enum AnnotationFactory {
 
     static func shape(rect: CGRect, tool: Tool, style: StylePreset, author: String) -> PDFAnnotation {
         let w = CGFloat(style.width)
-        let a = PDFAnnotation(bounds: rect.insetBy(dx: -w / 2, dy: -w / 2), forType: tool == .ellipse ? .circle : .square, withProperties: nil)
+        let a = RedlineShape(bounds: rect.insetBy(dx: -w / 2, dy: -w / 2), forType: tool == .ellipse ? .circle : .square, withProperties: nil)
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
         a.color = PDFColors.uiColor(style.color)
         let border = PDFBorder()
         border.lineWidth = w
-        border.style = style.lineStyle == .dash ? .dashed : .solid
-        if style.lineStyle == .dash { border.dashPattern = [NSNumber(value: Double(w) * 3), NSNumber(value: Double(w) * 2)] }
+        applyLineStyle(style.lineStyle, width: w, to: border)
         a.border = border
         if let fp = style.fillPattern, fp != FillPattern.none { a.interiorColor = PDFColors.uiColor(style.fill ?? style.color, alpha: style.fillOpacity ?? 0.5) }
         if let op = style.opacity, op < 1 { a.opacityValue = op }
@@ -252,7 +271,7 @@ enum AnnotationFactory {
         a.color = PDFColors.uiColor(style.color)
         let border = PDFBorder()
         border.lineWidth = w
-        border.style = style.lineStyle == .dash ? .dashed : .solid
+        applyLineStyle(style.lineStyle, width: w, to: border)
         a.border = border
         a.startPoint = CGPoint(x: p0.x - b.minX, y: p0.y - b.minY)
         a.endPoint = CGPoint(x: p1.x - b.minX, y: p1.y - b.minY)

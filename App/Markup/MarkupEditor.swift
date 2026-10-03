@@ -132,7 +132,7 @@ extension WorkspaceModel {
         let since = mk.lastSaveDate?.addingTimeInterval(-2)
         for i in 0..<pdf.pageCount {
             guard let p = pdf.page(at: i) else { continue }
-            for a in p.annotations where a.isRedlineTextBox || a.isRedlineNote || a.isRedlinePolygon || a.isRedlineLine || a.isRedlineMarkup || a.isRedlineInk || WidgetRenderer.wantsAppearance(a) {
+            for a in p.annotations where a.isRedlineTextBox || a.isRedlineNote || a.isRedlinePolygon || a.isRedlineLine || a.isRedlineMarkup || a.isRedlineInk || a.isRedlineShape || WidgetRenderer.wantsAppearance(a) {
                 // Untouched annotations keep the stream PDFKit carries over from the last save.
                 let fresh = since.map { (a.modificationDate ?? .distantFuture) >= $0 } ?? true
                 if fresh || a.value(forAnnotationKey: .appearanceDictionary) == nil { ours.append(a) }
@@ -233,6 +233,17 @@ extension WorkspaceModel {
                 }
             } else if a.subtype == "Polygon" {
                 if Hit.polygon(a.polygonVertices.map { Point($0.x, $0.y) }, contains: Point(p.x, p.y)) { return (a, nil) }
+            } else if a.subtype == "Square" || a.subtype == "Circle", a.interiorColor == nil, a.redlineTool != .redact {
+                // An unfilled box or ellipse is hit on its border only, so what's inside stays selectable.
+                let tol = (a.border?.lineWidth ?? 1) / 2 + 8 / z
+                let b = a.bounds.insetBy(dx: (a.border?.lineWidth ?? 1) / 2, dy: (a.border?.lineWidth ?? 1) / 2)
+                if a.subtype == "Square" {
+                    if b.insetBy(dx: -tol, dy: -tol).contains(p) && !b.insetBy(dx: tol, dy: tol).contains(p) { return (a, nil) }
+                } else {
+                    let rx = max(1, b.width / 2), ry = max(1, b.height / 2)
+                    let d = hypot((p.x - b.midX) / rx, (p.y - b.midY) / ry)
+                    if abs(d - 1) * min(rx, ry) <= tol { return (a, nil) }
+                }
             } else {
                 // Small annotations (sticky notes) get at least a 36-screen-point hit box.
                 let pad = max(4 / z, (36 / z - min(a.bounds.width, a.bounds.height)) / 2)
@@ -429,7 +440,7 @@ extension WorkspaceModel {
         if a.subtype == "Square" || a.subtype == "Circle" {
             if let ic = a.interiorColor { p.fill = PDFColors.hex(ic); p.fillPattern = .solid; var al: CGFloat = 1; ic.getWhite(nil, alpha: &al); p.fillOpacity = Double(al) } else { p.fillPattern = FillPattern.none }
         }
-        if a.border?.style == .dashed { p.lineStyle = .dash }
+        p.lineStyle = AnnotationFactory.lineStyle(of: a.border)
         _ = tool
         return p
     }
@@ -447,8 +458,7 @@ extension WorkspaceModel {
             a.color = PDFColors.uiColor(p.color)
             let b = PDFBorder()
             b.lineWidth = CGFloat(p.width)
-            b.style = p.lineStyle == .dash ? .dashed : .solid
-            if p.lineStyle == .dash { b.dashPattern = [NSNumber(value: p.width * 3), NSNumber(value: p.width * 2)] }
+            AnnotationFactory.applyLineStyle(p.lineStyle, width: CGFloat(p.width), to: b)
             a.border = b
             if a.subtype == "Square" || a.subtype == "Circle" {
                 if let fp = p.fillPattern, fp != FillPattern.none { a.interiorColor = PDFColors.uiColor(p.fill ?? p.color, alpha: p.fillOpacity ?? 0.5) } else { a.interiorColor = nil }
@@ -959,7 +969,7 @@ extension WorkspaceModel {
             case .redact: annots = [AnnotationFactory.redaction(rect: rect, author: author)]
             case .line, .arrow, .dblarrow: annots = [AnnotationFactory.line(from: a, to: b, tool: live.tool, style: st, author: author)]
             case .cloud:
-                annots = [AnnotationFactory.ink(paths: [MarkupGeometry.cloudPoints(rect)], tool: live.tool, style: st, author: author)]
+                annots = [AnnotationFactory.ink(paths: [MarkupGeometry.cloudPoints(rect, straight: st.cloudStyle == "straight")], tool: live.tool, style: st, author: author)]
             case .callout:
                 let L = mkCalloutLayout(tip: a, at: b, style: st)
                 let pair = AnnotationFactory.callout(tip: a, elbow: L.elbow, attach: L.attach, box: L.box, text: "", style: L.textStyle, author: author)
@@ -1377,8 +1387,11 @@ extension WorkspaceModel {
 }
 
 enum MarkupGeometry {
-    /// Revision cloud outline (page space) around a rectangle.
-    static func cloudPoints(_ rect: CGRect) -> [CGPoint] {
+    /// Revision cloud outline (page space) around a rectangle; `straight` gives the plain box instead of arcs.
+    static func cloudPoints(_ rect: CGRect, straight: Bool = false) -> [CGPoint] {
+        if straight {
+            return [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.maxY), CGPoint(x: rect.minX, y: rect.minY)]
+        }
         let r = Rect(x: rect.minX, y: rect.minY, w: rect.width, h: rect.height)
         return flatten(StrokeGeometry.cloud(r, radius: max(6, min(r.w, r.h) / 8)))
     }
