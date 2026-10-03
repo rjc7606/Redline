@@ -233,6 +233,12 @@ extension WorkspaceModel {
                 }
             } else if a.subtype == "Polygon" {
                 if Hit.polygon(a.polygonVertices.map { Point($0.x, $0.y) }, contains: Point(p.x, p.y)) { return (a, nil) }
+            } else if a.subtype == "Line" {
+                // Lines and arrows: hit along the shaft, not anywhere in the (often huge) diagonal bounding box.
+                let tol = Double((a.border?.lineWidth ?? 1) / 2 + 8 / z)
+                let p0 = CGPoint(x: a.bounds.minX + a.startPoint.x, y: a.bounds.minY + a.startPoint.y)
+                let p1 = CGPoint(x: a.bounds.minX + a.endPoint.x, y: a.bounds.minY + a.endPoint.y)
+                if Hit.distance(Point(p.x, p.y), toSegment: Point(p0.x, p0.y), Point(p1.x, p1.y)) <= tol { return (a, nil) }
             } else if a.subtype == "Square" || a.subtype == "Circle", a.interiorColor == nil, a.redlineTool != .redact {
                 // An unfilled box or ellipse is hit on its border only, so what's inside stays selectable.
                 let tol = (a.border?.lineWidth ?? 1) / 2 + 8 / z
