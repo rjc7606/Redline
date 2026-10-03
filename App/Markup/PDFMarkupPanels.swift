@@ -321,9 +321,11 @@ struct PDFOrganizePages: View {
     @State private var selected: Int? = nil
 
     var body: some View {
-        let _ = editor.mk.renderTick
+        let tick = editor.mk.renderTick
         let count = editor.mk.pageCount
-        let sel = selected ?? editor.pageIndex
+        // Keyed by the page object, so deleting, inserting, duplicating or reordering updates the right tile.
+        let pages: [PDFPage] = (0..<count).compactMap { editor.mk.page($0) }
+        let sel = min(selected ?? editor.pageIndex, max(0, count - 1))
         VStack(spacing: 0) {
             HStack {
                 Text("Organize Pages").font(titleFnt(21)).foregroundStyle(theme.ink1)
@@ -334,9 +336,9 @@ struct PDFOrganizePages: View {
             Text("Tap a page to select it, tap again to open · drag to reorder").font(fnt(12)).foregroundStyle(theme.ink4).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 24).padding(.bottom, 4)
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 160), spacing: 24, alignment: .top)], alignment: .leading, spacing: 24) {
-                    ForEach(0..<count, id: \.self) { i in
+                    ForEach(Array(pages.enumerated()), id: \.element) { i, page in
                         VStack(spacing: 8) {
-                            PDFPageThumb(editor: editor, index: i).frame(width: 160)
+                            PDFPageThumb(page: page, tick: tick).frame(width: 160)
                                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(i == sel ? theme.accent : .clear, lineWidth: 2).padding(-3))
                                 .contentShape(Rectangle())
                                 .onTapGesture { if sel == i { editor.setPage(i); editor.organizeOpen = false } else { selected = i } }
@@ -402,15 +404,15 @@ struct BlankPageTile: View {
 
 /// Synchronous small page image (annotations included) for modal grids.
 struct PDFPageThumb: View {
-    var editor: WorkspaceModel
-    var index: Int
+    var page: PDFPage
+    /// Changes whenever the document changes (rotation, annotations), so the image re-renders.
+    var tick: Int
     var body: some View {
-        if let page = editor.mk.page(index) {
-            let size = PDFService.displaySize(page)
-            let img = PDFDraw.image(of: page, width: 320, scale: 2)
-            Image(uiImage: img).resizable().aspectRatio(size.width / max(1, size.height), contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 6)).shadow(color: .black.opacity(0.15), radius: 3, y: 1)
-        }
+        let size = PDFService.displaySize(page)
+        let img = PDFDraw.image(of: page, width: 320, scale: 2)
+        Image(uiImage: img).resizable().aspectRatio(size.width / max(1, size.height), contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 6)).shadow(color: .black.opacity(0.15), radius: 3, y: 1)
+            .id(tick)
     }
 }
 
