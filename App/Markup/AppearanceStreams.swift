@@ -69,6 +69,8 @@ extension PDFAnnotation {
     var isRedlineLine: Bool { subtype == "Line" && redlineID != nil }
     /// A form field drawn with Redline's look.
     var isRedlineWidget: Bool { subtype == "Widget" && redlineID != nil }
+    /// Pen / marker ink drawn by Redline (PDFKit ignores an Ink annotation's opacity and doubles overlaps).
+    var isRedlineInk: Bool { subtype == "Ink" && redlineID != nil }
     /// Highlight / underline / strikeout / squiggly drawn by Redline (PDFKit ignores their opacity).
     var isRedlineMarkup: Bool { ["Highlight", "Underline", "StrikeOut", "Squiggly"].contains(subtype) && redlineID != nil }
 
@@ -121,11 +123,57 @@ final class RedlineNote: PDFAnnotation {
     }
 }
 
+/// Ink drawn with the annotation's opacity applied once to the whole annotation (all its strokes in one
+/// transparency layer, so overlapping strokes and joins never go darker), multiply blend for markers.
+final class RedlineInk: PDFAnnotation {
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        InkRenderer.draw(self, origin: .zero, in: context)   // page space on screen
+    }
+}
+
+enum InkRenderer {
+    static func draw(_ a: PDFAnnotation, origin: CGPoint, in cg: CGContext) {
+        let paths = AnnotationFactory.inkPaths(a)
+        guard !paths.isEmpty else { return }
+        let w = max(0.3, a.border?.lineWidth ?? 2)
+        let marker = a.redlineTool == .marker || a.redlineTool == .highlighter
+        cg.saveGState()
+        if marker { cg.setBlendMode(.multiply) }
+        cg.setAlpha(CGFloat(a.opacityValue))
+        cg.beginTransparencyLayer(auxiliaryInfo: nil)
+        cg.setStrokeColor(a.color.cgColor)
+        cg.setLineWidth(w)
+        cg.setLineCap(.round); cg.setLineJoin(.round)
+        if a.border?.style == .dashed, let d = a.border?.dashPattern as? [NSNumber], !d.isEmpty { cg.setLineDash(phase: 0, lengths: d.map { CGFloat($0.doubleValue) }) }
+        for path in paths {
+            guard let f = path.first else { continue }
+            cg.move(to: CGPoint(x: f.x - origin.x, y: f.y - origin.y))
+            if path.count == 1 { cg.addLine(to: CGPoint(x: f.x - origin.x + 0.1, y: f.y - origin.y)) }
+            for p in path.dropFirst() { cg.addLine(to: CGPoint(x: p.x - origin.x, y: p.y - origin.y)) }
+        }
+        cg.strokePath()
+        cg.endTransparencyLayer()
+        cg.restoreGState()
+    }
+
+    static func appearancePDF(for a: PDFAnnotation) -> Data {
+        let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
+        let origin = a.bounds.origin
+        return UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+            c.beginPage()
+            let cg = c.cgContext
+            cg.translateBy(x: 0, y: size.height)
+            cg.scaleBy(x: 1, y: -1)
+            draw(a, origin: origin, in: cg)
+        }
+    }
+}
+
 /// Text markup (highlight, underline, strikeout, squiggly) drawn at its real opacity; PDFKit's default draws
 /// highlights fully opaque whatever /CA says.
 final class RedlineMarkup: PDFAnnotation {
     override func draw(with box: PDFDisplayBox, in context: CGContext) {
-        MarkupRenderer.draw(self, origin: bounds.origin, in: context)
+        MarkupRenderer.draw(self, origin: .zero, in: context)   // page space on screen
     }
 }
 
@@ -332,7 +380,7 @@ enum WidgetRenderer {
 /// Line / arrow drawn with round caps and joins (PDFKit's default draws them square).
 final class RedlineLine: PDFAnnotation {
     override func draw(with box: PDFDisplayBox, in context: CGContext) {
-        LineRenderer.draw(self, origin: bounds.origin, in: context)
+        LineRenderer.draw(self, origin: .zero, in: context)   // page space on screen
     }
 }
 
@@ -380,7 +428,7 @@ enum LineRenderer {
 /// Bucket fill drawn as a filled polygon (readers that know /Polygon /IC show it too; the appearance stream covers the rest).
 final class RedlinePolygon: PDFAnnotation {
     override func draw(with box: PDFDisplayBox, in context: CGContext) {
-        PolygonRenderer.draw(self, origin: bounds.origin, in: context)
+        PolygonRenderer.draw(self, origin: .zero, in: context)   // page space on screen
     }
 }
 
@@ -521,7 +569,7 @@ enum TextBoxRenderer {
 enum AppearancePatcher {
     @discardableResult
     static func patch(fileURL: URL, annotations: [PDFAnnotation]) -> Bool {
-        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || WidgetRenderer.wantsAppearance($0) }
+        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || $0.isRedlineInk || WidgetRenderer.wantsAppearance($0) }
         guard !ours.isEmpty, let data = try? Data(contentsOf: fileURL), let file = PDFFile(data: data) else { return ours.isEmpty }
         var byID: [String: (num: Int, dict: [String: PDFObj])] = [:]
         for page in file.pages() {
@@ -539,6 +587,7 @@ enum AppearancePatcher {
             else if a.isRedlineLine { helperData = LineRenderer.appearancePDF(for: a) }
             else if a.isRedlineWidget { helperData = WidgetRenderer.appearancePDF(for: a) }
             else if a.isRedlineMarkup { helperData = MarkupRenderer.appearancePDF(for: a) }
+            else if a.isRedlineInk { helperData = InkRenderer.appearancePDF(for: a) }
             else { helperData = TextBoxRenderer.appearancePDF(for: a) }
             guard let helper = PDFFile(data: helperData), let page = helper.pages().first else { continue }
             let importer = PDFObjectImporter(source: helper, firstFreeNumber: next)
@@ -588,6 +637,7 @@ enum AppearancePatcher {
         (a.isRedlineTextBox && !(a is RedlineFreeText)) || (a.isRedlineNote && !(a is RedlineNote))
             || (a.isRedlinePolygon && !(a is RedlinePolygon)) || (a.isRedlineLine && !(a is RedlineLine))
             || (a.isRedlineWidget && !(a is RedlineWidget)) || (a.isRedlineMarkup && !(a is RedlineMarkup))
+            || (a.isRedlineInk && !(a is RedlineInk))
     }
 
     /// Promotes a group of annotations in place: same page order, same keys (including /AP), replies re-pointed.
@@ -604,6 +654,7 @@ enum AppearancePatcher {
             else if a.isRedlineLine { r = RedlineLine(bounds: a.bounds, forType: .line, withProperties: a.annotationKeyValues) }
             else if a.isRedlineWidget { r = RedlineWidget(bounds: a.bounds, forType: .widget, withProperties: a.annotationKeyValues) }
             else if a.isRedlineMarkup { r = RedlineMarkup(bounds: a.bounds, forType: PDFAnnotationSubtype(rawValue: "/" + a.subtype), withProperties: a.annotationKeyValues) }
+            else if a.isRedlineInk { r = RedlineInk(bounds: a.bounds, forType: .ink, withProperties: a.annotationKeyValues) }
             else { r = RedlineFreeText(bounds: a.bounds, forType: .freeText, withProperties: a.annotationKeyValues) }
             map[ObjectIdentifier(a)] = r
             page.addAnnotation(r)

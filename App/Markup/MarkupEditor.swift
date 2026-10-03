@@ -39,7 +39,7 @@ struct MarkupComment: Identifiable {
 @Observable
 final class MarkupState {
     var pdf: PDFDocument?
-    @ObservationIgnored weak var pdfView: PDFView?
+    @ObservationIgnored weak var pdfView: PDFStackView?
     var selected: [PDFAnnotation] = []
     var activeInk: PDFAnnotation? = nil
     /// First Ink annotation of the current pen chain (group parent when colours change mid-chain).
@@ -72,6 +72,13 @@ final class MarkupState {
     @ObservationIgnored var saveTask: Task<Void, Never>? = nil
     @ObservationIgnored var styleSnapshotTaken = false
     @ObservationIgnored var eraseSnapshotTaken = false
+    /// One eraser drag: snapshots taken BEFORE the first cut, strokes removed along the way, last point (throttle).
+    @ObservationIgnored var eraseSnaps: [(PDFAnnotation, AnnotationSnapshot)] = []
+    @ObservationIgnored var eraseRemoved: [PDFAnnotation] = []
+    @ObservationIgnored var eraseChanged = false
+    @ObservationIgnored var lastErasePoint: CGPoint? = nil
+    /// When the file was last written; appearance streams are rebuilt only for annotations modified since.
+    @ObservationIgnored var lastSaveDate: Date? = nil
     @ObservationIgnored var pendingTextEdit: PDFAnnotation? = nil
     /// Snapshot taken when a text edit starts (undo for the whole edit).
     @ObservationIgnored var textEditSnapshot: AnnotationSnapshot? = nil
@@ -119,11 +126,26 @@ extension WorkspaceModel {
         guard mk.dirty, let f = doc.pdfFile, let pdf = mk.pdf else { return }
         mk.dirty = false
         let url = app.pdf.url(for: f)
-        if pdf.write(to: url) {
-            // PDFKit can't write appearance streams: attach ours for text boxes in an incremental update.
-            var textBoxes: [PDFAnnotation] = []
-            for i in 0..<pdf.pageCount { if let p = pdf.page(at: i) { textBoxes += p.annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || WidgetRenderer.wantsAppearance($0) } } }
-            AppearancePatcher.patch(fileURL: url, annotations: textBoxes)
+        var ours: [PDFAnnotation] = []
+        let since = mk.lastSaveDate?.addingTimeInterval(-2)
+        for i in 0..<pdf.pageCount {
+            guard let p = pdf.page(at: i) else { continue }
+            for a in p.annotations where a.isRedlineTextBox || a.isRedlineNote || a.isRedlinePolygon || a.isRedlineLine || a.isRedlineMarkup || a.isRedlineInk || WidgetRenderer.wantsAppearance(a) {
+                // Untouched annotations keep the stream PDFKit carries over from the last save.
+                let fresh = since.map { (a.modificationDate ?? .distantFuture) >= $0 } ?? true
+                if fresh || a.value(forAnnotationKey: .appearanceDictionary) == nil { ours.append(a) }
+            }
+        }
+        // The file may live anywhere in Files (opened in place), so the write is coordinated.
+        var ok = false
+        var coordError: NSError? = nil
+        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordError) { u in
+            ok = pdf.write(to: u)
+            // PDFKit can't write appearance streams: attach ours in an incremental update.
+            if ok { AppearancePatcher.patch(fileURL: u, annotations: ours) }
+        }
+        if ok {
+            mk.lastSaveDate = Date()
             app.pdf.invalidateImages(f)
             app.patch(docID) { $0.modified = Date() }
         } else {
@@ -141,6 +163,8 @@ extension WorkspaceModel {
             if reverse { annots.forEach { page.addAnnotation($0) } } else { annots.forEach { page.removeAnnotation($0) } }
         case .change(let pairs):
             for (a, snap) in pairs { snap.restore(to: a) }
+        case .group(let cmds):
+            for c in (reverse ? cmds.reversed() : cmds) { mkApply(c, reverse: reverse) }
         }
     }
 
@@ -158,6 +182,7 @@ extension WorkspaceModel {
         case .add(let p, let a): return .remove(page: p, annots: a)
         case .remove(let p, let a): return .add(page: p, annots: a)
         case .change(let pairs): return .change(annots: pairs.map { ($0.0, AnnotationSnapshot($0.0)) })
+        case .group(let cmds): return .group(cmds.reversed().map { mkInverse($0) })
         }
     }
 
@@ -206,8 +231,10 @@ extension WorkspaceModel {
                 }
             } else if a.subtype == "Polygon" {
                 if Hit.polygon(a.polygonVertices.map { Point($0.x, $0.y) }, contains: Point(p.x, p.y)) { return (a, nil) }
-            } else if a.bounds.insetBy(dx: -4 / z, dy: -4 / z).contains(p) {
-                return (a, nil)
+            } else {
+                // Small annotations (sticky notes) get at least a 36-screen-point hit box.
+                let pad = max(4 / z, (36 / z - min(a.bounds.width, a.bounds.height)) / 2)
+                if a.bounds.insetBy(dx: -pad, dy: -pad).contains(p) { return (a, nil) }
             }
         }
         return nil
@@ -369,6 +396,7 @@ extension WorkspaceModel {
 
     /// Whether an annotation carries comment text or replies (drives the badge).
     func mkHasComment(_ a: PDFAnnotation, replied: Set<ObjectIdentifier>) -> Bool {
+        if a.redlineTool == .note || a.subtype == "Text" { return false }   // a sticky note IS the comment
         if !a.redlineTool.isTextual, !(a.contents ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         return replied.contains(ObjectIdentifier(a))
     }
@@ -503,6 +531,7 @@ extension WorkspaceModel {
                 cg.translateBy(x: 0, y: size.height)
                 cg.scaleBy(x: 1, y: -1)
                 page.draw(with: .mediaBox, to: cg)
+                PDFDraw.annotations(of: page, in: cg)
                 cg.restoreGState()
             }
         }
@@ -570,7 +599,7 @@ extension WorkspaceModel {
         if !s.isPencil, !mk.selected.isEmpty, let a = mkAnnotation(at: p, page: page)?.annotation, mk.selected.contains(where: { $0 === a }) {
             let movable = mkMovableSelection
             if movable.isEmpty { mkDrag = .pan; return }   // a highlight stays with its text
-            mkDrag = .move(start: p, snaps: movable.map { ($0, AnnotationSnapshot($0)) })
+            mkDrag = .move(start: p, snaps: movable.map { ($0, AnnotationSnapshot($0)) }, boxOnly: mkIsCalloutBox(a))
             mk.pendingTextEdit = (a.subtype == "FreeText") ? a : nil
             return
         }
@@ -598,7 +627,7 @@ extension WorkspaceModel {
                 if mk.selected.contains(where: { $0 === a }) {
                     let movable = mkMovableSelection
                     if movable.isEmpty { mkDrag = nil; return }
-                    mkDrag = .move(start: p, snaps: movable.map { ($0, AnnotationSnapshot($0)) })
+                    mkDrag = .move(start: p, snaps: movable.map { ($0, AnnotationSnapshot($0)) }, boxOnly: mkIsCalloutBox(a))
                     mk.pendingTextEdit = (a.subtype == "FreeText") ? a : nil
                 } else {
                     mkSelectHit(at: p, page: page, splitStrokes: true)
@@ -628,9 +657,9 @@ extension WorkspaceModel {
             }
             mk.renderTick += 1
         case .eraser:
-            mk.eraseSnapshotTaken = false
             mkDrag = .erase
             mk.eraserPoint = p; mk.eraserPage = page
+            mkBeginErase(on: page)
             mkEraseAt(p, page: page)
             mk.renderTick += 1
         default:
@@ -684,12 +713,17 @@ extension WorkspaceModel {
             }
             if !mkLassoMode { mk.marquee = CGRect(x: min(start.x, p.x), y: min(start.y, p.y), width: abs(p.x - start.x), height: abs(p.y - start.y)) }
             mk.renderTick += 1
-        case .move(let start, let snaps):
+        case .move(let start, let snaps, let boxOnly):
             let dx = p.x - start.x, dy = p.y - start.y
             if !mkDragMoved { if hypot(dx, dy) < 2 / mkZoom { return }; mkDragMoved = true; mkPerform(.change(annots: snaps), alreadyApplied: true) }
             for (a, snap) in snaps {
+                // Dragging a callout's box alone: the leader stays put here and is re-laid around its fixed tip below.
+                if boxOnly, a.subtype == "Ink", a.redlineTool == .callout { continue }
                 a.bounds = snap.bounds.offsetBy(dx: dx, dy: dy)
                 if let vs = snap.vertices { a.polygonVertices = vs.map { CGPoint(x: $0.x + dx, y: $0.y + dy) }; a.dropAppearance() }
+            }
+            if boxOnly {
+                for (a, _) in snaps where mkIsCalloutBox(a) { if let pg = a.page { mkRelayoutLeader(for: a, on: pg) } }
             }
             mkMarkDirty()
         case .resize(let center, let d0, let snaps):
@@ -703,6 +737,7 @@ extension WorkspaceModel {
                 let h = max(need, b.maxY - p.y)
                 a.bounds = CGRect(x: b.minX, y: b.maxY - h, width: w, height: h)
                 a.isManuallySized = true
+                a.modificationDate = Date()
                 a.dropAppearance()
                 if a.redlineTool == .callout { mkRelayoutLeader(for: a, on: page) }
                 mkMarkDirty()
@@ -801,7 +836,7 @@ extension WorkspaceModel {
         case .resize, .handle:
             mk.renderTick += 1
         case .erase:
-            break
+            mkEndErase(on: page)
         case .rulerTap:
             toggleRulerLock(); mk.renderTick += 1
         case .rulerMove, .rulerRotate:
@@ -820,6 +855,7 @@ extension WorkspaceModel {
     }
 
     func mkPointerCancel() {
+        if case .erase? = mkDrag, let pg = mk.eraserPage { mkEndErase(on: pg) }
         mkDrag = nil
         mk.live = nil
         mk.eraserPoint = nil; mk.eraserPage = nil
@@ -848,7 +884,6 @@ extension WorkspaceModel {
         case .always: return true
         case .never: return false
         case .auto:
-            if UIPencilInteraction.prefersPencilOnlyDrawing { return false }
             if fingerInkAllowed == nil { fingerInkAllowed = !isPencil }
             return fingerInkAllowed ?? true
         }
@@ -1041,12 +1076,34 @@ extension WorkspaceModel {
         return nil
     }
 
+    private func mkErasable(_ a: PDFAnnotation) -> Bool { a.subtype == "Ink" && (a.redlineTool.isPen || a.redlineTool == .signature) }
+
+    /// Start of an eraser drag: snapshot every erasable stroke on the page before anything is cut.
+    private func mkBeginErase(on page: PDFPage) {
+        mk.eraseSnaps = page.annotations.filter(mkErasable).map { ($0, AnnotationSnapshot($0)) }
+        mk.eraseRemoved = []
+        mk.eraseChanged = false
+        mk.lastErasePoint = nil
+    }
+
+    /// End of the drag: everything it cut or removed becomes a single undo step.
+    private func mkEndErase(on page: PDFPage) {
+        defer { mk.eraseSnaps = []; mk.eraseRemoved = []; mk.eraseChanged = false; mk.lastErasePoint = nil }
+        guard mk.eraseChanged else { return }
+        var cmds: [PDFCommand] = [.change(annots: mk.eraseSnaps)]
+        if !mk.eraseRemoved.isEmpty { cmds.append(.remove(page: page, annots: mk.eraseRemoved)) }
+        mkPerform(.group(cmds), alreadyApplied: true)
+    }
+
     private func mkEraseAt(_ p: CGPoint, page: PDFPage) {
         let r = CGFloat(max(2, style(for: .eraser).width / 2))
+        // Throttle: a move shorter than a third of the radius changes nothing visible.
+        if let last = mk.lastErasePoint, hypot(last.x - p.x, last.y - p.y) < r / 3 { return }
+        mk.lastErasePoint = p
         // Only pen ink is erasable; shapes, arrows, clouds and callout leaders stay whole.
-        let inks = page.annotations.filter { $0.subtype == "Ink" && ($0.redlineTool.isPen || $0.redlineTool == .signature) && $0.bounds.insetBy(dx: -r, dy: -r).contains(p) }
-        var changed: [(PDFAnnotation, AnnotationSnapshot)] = []
+        let inks = page.annotations.filter { mkErasable($0) && $0.bounds.insetBy(dx: -r, dy: -r).contains(p) }
         var removed: [PDFAnnotation] = []
+        var touchedAny = false
         for a in inks {
             let paths = AnnotationFactory.inkPaths(a)
             let w = (a.border?.lineWidth ?? 2) / 2
@@ -1064,19 +1121,16 @@ extension WorkspaceModel {
                 if run.count >= 2 { out.append(run) }
             }
             guard touched else { continue }
-            if !mk.eraseSnapshotTaken { changed.append((a, AnnotationSnapshot(a))) }
+            touchedAny = true
+            if !mk.eraseSnaps.contains(where: { $0.0 === a }) { mk.eraseSnaps.append((a, AnnotationSnapshot(a))) }   // drawn mid-drag
             if out.isEmpty { removed.append(a) } else { AnnotationFactory.setInkPaths(a, out) }
         }
-        guard !changed.isEmpty || !removed.isEmpty else { return }
-        if !mk.eraseSnapshotTaken {
-            // One undo step for the whole erase drag: snapshot every ink on the page.
-            let all = page.annotations.filter { $0.subtype == "Ink" }.map { ($0, AnnotationSnapshot($0)) }
-            mkPerform(.change(annots: all), alreadyApplied: true)
-            mk.eraseSnapshotTaken = true
-        }
-        if !removed.isEmpty { removed.forEach { page.removeAnnotation($0) }; mk.undoStack.append(.remove(page: page, annots: removed)) }
+        guard touchedAny else { return }
+        mk.eraseChanged = true
+        if !removed.isEmpty { removed.forEach { page.removeAnnotation($0) }; mk.eraseRemoved += removed }
         if mk.activeInk.map({ removed.contains($0) }) == true { mk.activeInk = nil; mk.activeInkRoot = nil }
-        mkMarkDirty()
+        mk.dirty = true
+        mk.renderTick += 1   // the save itself waits for the drag to end
     }
 
     // MARK: text editing (FreeText)
@@ -1154,10 +1208,31 @@ extension WorkspaceModel {
         let fs = CGFloat(10 + st.width)
         let empty = TextBoxRenderer.fittingSize(text: "", font: AnnotationFactory.fontFor(tb, size: fs))
         let box = CGRect(x: b.x, y: b.y - empty.height, width: max(60, empty.width), height: empty.height)
-        let left = a.x < box.midX
-        let elbow = CGPoint(x: left ? box.minX - 28 : box.maxX + 28, y: box.midY)
-        let attach = CGPoint(x: left ? box.minX : box.maxX, y: box.midY)
-        return (box, elbow, attach, tb)
+        let g = mkCalloutGeometry(box: box, tip: a, distance: 28)
+        return (box, g.elbow, g.attach, tb)
+    }
+
+    func mkIsCalloutBox(_ a: PDFAnnotation) -> Bool { a.subtype == "FreeText" && a.redlineTool == .callout }
+
+    enum CalloutSide { case left, right, top, bottom }
+
+    /// The side of the box that faces the tip (by the box's aspect, so wide boxes prefer top / bottom less readily).
+    func mkCalloutSide(box: CGRect, tip: CGPoint) -> CalloutSide {
+        let dx = tip.x - box.midX, dy = tip.y - box.midY
+        if abs(dx) / max(1, box.width) >= abs(dy) / max(1, box.height) { return dx < 0 ? .left : .right }
+        return dy < 0 ? .bottom : .top
+    }
+
+    /// Attach point = midpoint of the facing side; elbow = that point pushed `distance` straight out from the side.
+    func mkCalloutGeometry(box: CGRect, tip: CGPoint, distance d: CGFloat) -> (attach: CGPoint, elbow: CGPoint, side: CalloutSide) {
+        let side = mkCalloutSide(box: box, tip: tip)
+        let dd = max(10, d)
+        switch side {
+        case .left: return (CGPoint(x: box.minX, y: box.midY), CGPoint(x: box.minX - dd, y: box.midY), side)
+        case .right: return (CGPoint(x: box.maxX, y: box.midY), CGPoint(x: box.maxX + dd, y: box.midY), side)
+        case .top: return (CGPoint(x: box.midX, y: box.maxY), CGPoint(x: box.midX, y: box.maxY + dd), side)
+        case .bottom: return (CGPoint(x: box.midX, y: box.minY), CGPoint(x: box.midX, y: box.minY - dd), side)
+        }
     }
 
     func mkCommitTextEdit() {
@@ -1203,16 +1278,7 @@ extension WorkspaceModel {
     /// Leader points: attach (0), elbow (1), tip (2) of the first path.
     func mkLeaderPoints(_ leader: PDFAnnotation) -> [CGPoint] { AnnotationFactory.inkPaths(leader).first ?? [] }
 
-    private func mkAttach(box: CGRect, elbow: CGPoint) -> CGPoint {
-        if elbow.x < box.minX { return CGPoint(x: box.minX, y: min(box.maxY, max(box.minY, elbow.y))) }
-        if elbow.x > box.maxX { return CGPoint(x: box.maxX, y: min(box.maxY, max(box.minY, elbow.y))) }
-        if elbow.y > box.maxY { return CGPoint(x: min(box.maxX, max(box.minX, elbow.x)), y: box.maxY) }
-        if elbow.y < box.minY { return CGPoint(x: min(box.maxX, max(box.minX, elbow.x)), y: box.minY) }
-        return CGPoint(x: box.minX, y: box.midY)
-    }
-
-    private func mkSetLeader(_ leader: PDFAnnotation, tip: CGPoint, elbow: CGPoint, box: CGRect) {
-        let attach = mkAttach(box: box, elbow: elbow)
+    private func mkSetLeader(_ leader: PDFAnnotation, tip: CGPoint, elbow: CGPoint, attach: CGPoint) {
         let w = leader.border?.lineWidth ?? 1.5
         let ang = atan2(tip.y - elbow.y, tip.x - elbow.x)
         let size = max(10, w * 4)
@@ -1221,20 +1287,39 @@ extension WorkspaceModel {
         AnnotationFactory.setInkPaths(leader, [[attach, elbow, tip], [h1, tip, h2]])
     }
 
+    /// Re-lays the leader around its fixed tip: the elbow jumps to whichever side now faces the tip, keeping its distance.
     func mkRelayoutLeader(for box: PDFAnnotation, on page: PDFPage) {
         guard let leader = mkLeader(for: box, on: page) else { return }
         let pts = mkLeaderPoints(leader)
         guard pts.count >= 3 else { return }
-        mkSetLeader(leader, tip: pts[2], elbow: pts[1], box: box.bounds)
+        let d = hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+        let g = mkCalloutGeometry(box: box.bounds, tip: pts[2], distance: d)
+        mkSetLeader(leader, tip: pts[2], elbow: g.elbow, attach: g.attach)
     }
 
+    /// Tip handle (0): re-aims the arrow, the elbow follows to the facing side. Elbow handle (1): slides straight
+    /// out from its side — horizontally on the left / right, vertically on the top / bottom.
     private func mkMoveLeaderPoint(_ leader: PDFAnnotation, index: Int, to p: CGPoint) {
         guard let page = leader.page, let box = mkGroup(of: leader, on: page).first(where: { $0.subtype == "FreeText" }) else { return }
         let pts = mkLeaderPoints(leader)
         guard pts.count >= 3 else { return }
-        let tip = index == 0 ? p : pts[2]
-        let elbow = index == 1 ? p : pts[1]
-        mkSetLeader(leader, tip: tip, elbow: elbow, box: box.bounds)
+        let b = box.bounds
+        if index == 0 {
+            let d = hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+            let g = mkCalloutGeometry(box: b, tip: p, distance: d)
+            mkSetLeader(leader, tip: p, elbow: g.elbow, attach: g.attach)
+        } else {
+            let side = mkCalloutSide(box: b, tip: pts[2])
+            let d: CGFloat
+            switch side {
+            case .left: d = b.minX - p.x
+            case .right: d = p.x - b.maxX
+            case .top: d = p.y - b.maxY
+            case .bottom: d = b.minY - p.y
+            }
+            let g = mkCalloutGeometry(box: b, tip: pts[2], distance: d)
+            mkSetLeader(leader, tip: pts[2], elbow: g.elbow, attach: g.attach)
+        }
         mkMarkDirty()
     }
 }

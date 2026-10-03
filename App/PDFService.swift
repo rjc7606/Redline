@@ -7,6 +7,45 @@ struct RenderablePage: @unchecked Sendable {
     let page: PDFPage
 }
 
+/// Drawing helpers shared by the viewer, thumbnails and exports (not main-actor bound: tiles and the render
+/// queue draw on background threads).
+enum PDFDraw {
+    /// Draws a page's annotations into a context set up the way `PDFPage.draw(with:to:)` expects (display box,
+    /// y up). Pages shown in the viewer have `displaysAnnotations` off, so their annotations are drawn here; pages
+    /// that still draw their own are left alone (no double draw).
+    static func annotations(of page: PDFPage, in cg: CGContext) {
+        guard !page.displaysAnnotations else { return }
+        cg.saveGState()
+        cg.concatenate(page.transform(for: .mediaBox))
+        for a in page.annotations where a.shouldDisplay && !a.isPopup {
+            a.draw(with: .mediaBox, in: cg)
+        }
+        cg.restoreGState()
+    }
+
+    /// Whole page (content + annotations) as an image `width` points wide, rendered now on the calling thread.
+    static func image(of page: PDFPage, width: CGFloat, scale: CGFloat = 1) -> UIImage {
+        let disp = PDFService.displaySize(page)
+        let size = CGSize(width: width, height: max(1, (width * disp.height / max(1, disp.width)).rounded()))
+        let fmt = UIGraphicsImageRendererFormat()
+        fmt.scale = scale
+        fmt.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+            let cg = ctx.cgContext
+            cg.setFillColor(UIColor.white.cgColor)
+            cg.fill(CGRect(origin: .zero, size: size))
+            cg.saveGState()
+            cg.scaleBy(x: size.width / max(1, disp.width), y: size.height / max(1, disp.height))
+            cg.translateBy(x: 0, y: disp.height)
+            cg.scaleBy(x: 1, y: -1)
+            cg.interpolationQuality = .high
+            page.draw(with: .mediaBox, to: cg)
+            annotations(of: page, in: cg)
+            cg.restoreGState()
+        }
+    }
+}
+
 /// Serial background renderer: one page at a time, never on the main thread.
 actor PDFRenderQueue {
     static let shared = PDFRenderQueue()
@@ -26,6 +65,7 @@ actor PDFRenderQueue {
             cg.scaleBy(x: 1, y: -1)
             cg.interpolationQuality = .high
             wrapped.page.draw(with: .mediaBox, to: cg)
+            PDFDraw.annotations(of: wrapped.page, in: cg)
             cg.restoreGState()
         }
     }
@@ -44,7 +84,13 @@ final class PDFService {
     @ObservationIgnored private var imageOrder: [String] = []
     @ObservationIgnored private var thumbs: [String: UIImage] = [:]
     @ObservationIgnored private var pending: Set<String> = []
+    /// PDFs opened in place: "ext:<id>" → their resolved URL (security scope held while registered).
+    @ObservationIgnored private var external: [String: URL] = [:]
     private let maxImages = 12
+
+    func register(_ file: String, url: URL) { external[file] = url; docs[file] = nil }
+    func isExternal(_ file: String) -> Bool { file.hasPrefix("ext:") }
+    func externalURL(_ file: String) -> URL? { external[file] }
 
     /// Imported PDFs live in Documents/PDFs so they show up in the Files app.
     static var directory: URL {
@@ -53,7 +99,7 @@ final class PDFService {
         return d
     }
 
-    func url(for file: String) -> URL { PDFService.directory.appendingPathComponent(file) }
+    func url(for file: String) -> URL { external[file] ?? PDFService.directory.appendingPathComponent(file) }
 
     func document(_ file: String) -> PDFDocument? {
         if let d = docs[file] { return d }
@@ -74,6 +120,7 @@ final class PDFService {
 
     func forget(_ file: String) {
         docs[file] = nil
+        external[file] = nil
         for k in images.keys where k.hasPrefix(file + "#") { images[k] = nil }
         for k in thumbs.keys where k.hasPrefix("t:" + file + "#") { thumbs[k] = nil }
         imageOrder.removeAll { $0.hasPrefix(file + "#") }
@@ -83,20 +130,20 @@ final class PDFService {
     // MARK: geometry
 
     /// Size of the page as displayed (rotation applied), in PDF points.
-    static func displaySize(_ page: PDFPage) -> CGSize {
+    nonisolated static func displaySize(_ page: PDFPage) -> CGSize {
         let b = page.bounds(for: .mediaBox)
         return page.rotation % 180 == 0 ? b.size : CGSize(width: b.height, height: b.width)
     }
 
     /// Page space → displayed space (origin top-left, y down, PDF points).
-    static func pageToDisplay(_ page: PDFPage) -> CGAffineTransform {
+    nonisolated static func pageToDisplay(_ page: PDFPage) -> CGAffineTransform {
         let size = displaySize(page)
         let flip = CGAffineTransform(scaleX: 1, y: -1).concatenating(CGAffineTransform(translationX: 0, y: size.height))
         return page.transform(for: .mediaBox).concatenating(flip)
     }
 
     /// Logical canvas size (1000 wide) matching the page's aspect ratio.
-    static func canvasSize(for page: PDFPage) -> Size {
+    nonisolated static func canvasSize(for page: PDFPage) -> Size {
         let s = displaySize(page)
         guard s.width > 0, s.height > 0 else { return Metrics.sheetCanvas }
         return Size(1000, (1000 * s.height / s.width).rounded())

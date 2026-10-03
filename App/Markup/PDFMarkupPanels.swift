@@ -407,7 +407,7 @@ struct PDFPageThumb: View {
     var body: some View {
         if let page = editor.mk.page(index) {
             let size = PDFService.displaySize(page)
-            let img = page.thumbnail(of: CGSize(width: 320, height: 320 * size.height / max(1, size.width)), for: .mediaBox)
+            let img = PDFDraw.image(of: page, width: 320, scale: 2)
             Image(uiImage: img).resizable().aspectRatio(size.width / max(1, size.height), contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 6)).shadow(color: .black.opacity(0.15), radius: 3, y: 1)
         }
@@ -484,8 +484,7 @@ enum PDFExport {
             return editor.mkAnnotatedURL()
         case .png:
             guard let page = editor.mk.page(editor.pageIndex) else { return nil }
-            let s = PDFService.displaySize(page)
-            let img = page.thumbnail(of: CGSize(width: 2000, height: 2000 * s.height / max(1, s.width)), for: .mediaBox)
+            let img = PDFDraw.image(of: page, width: 2000)
             return img.pngData().flatMap { write($0, name: "\(base) — page \(editor.pageIndex + 1).png") }
         case .saveToFiles:
             guard let data = editor.mkFlattenedData() else { return nil }

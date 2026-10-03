@@ -161,8 +161,6 @@ extension DocTile where Extra == EmptyView {
 struct NewDocumentSheet: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
-    @State private var importing = false
-
     var body: some View {
         if let draft = app.newDraft {
             let d = Binding(get: { app.newDraft ?? draft }, set: { app.newDraft = $0 })
@@ -170,24 +168,6 @@ struct NewDocumentSheet: View {
                 Text(draft.type.newSheetTitle).font(titleFnt(20)).foregroundStyle(theme.ink1)
                 FieldText(placeholder: "Name", text: d.name, height: 40, font: fnt(15))
                 if draft.type == .markup {
-                    VStack(spacing: 8) {
-                        Button { importing = true } label: {
-                            HStack(spacing: 8) { Image(systemName: "square.and.arrow.up").font(fnt(17, .medium)); Text(draft.pdfFile == nil ? "Import a PDF" : "PDF imported · \(draft.pdfPages ?? 0) pages").font(fnt(14, .semibold)) }
-                                .foregroundStyle(theme.accent).frame(maxWidth: .infinity).padding(22)
-                                .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.line2, style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])))
-                        }.buttonStyle(.plain)
-                        Text("or create a new PDF on the paper below").font(fnt(12)).foregroundStyle(theme.ink4)
-                    }
-                    .fileImporter(isPresented: $importing, allowedContentTypes: [UTType.pdf]) { result in
-                        if case .success(let url) = result, let r = app.importPDF(from: url) {
-                            app.newDraft?.pdfFile = r.file
-                            app.newDraft?.pdfPages = r.pages
-                            app.newDraft?.sheetSize = r.sheetSize
-                            if app.newDraft?.name.isEmpty ?? false { app.newDraft?.name = url.deletingPathExtension().lastPathComponent }
-                        } else {
-                            app.flash("Could not import that PDF")
-                        }
-                    }
                     if draft.pdfFile == nil {
                         HStack(alignment: .top, spacing: 22) {
                             // Live model of the page: paper, colour and orientation (max height 260 so the sheet fits 11" portrait).

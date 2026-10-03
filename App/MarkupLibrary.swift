@@ -229,7 +229,6 @@ struct HomeBrowser: View {
                 SegmentControl(options: HomeSort.allCases.map { SegmentOption(value: $0, label: $0.rawValue) }, selection: $app.homeSort, fontSize: 13, vPad: 5, hPad: 14, radius: 9)
                 if shelf == .markup {
                     SecondaryButton(label: "New Folder", symbol: "folder.badge.plus") { folderDraft = ""; newFolderOn = true }
-                    SecondaryButton(label: "Import PDF", symbol: "square.and.arrow.down") { importing = true }
                 }
                 PrimaryButton(label: shelf.newLabel, symbol: "plus", tint: shelf.tint) {
                     app.settings.shelf = shelf
@@ -300,7 +299,7 @@ struct HomeBrowser: View {
         VStack(spacing: 14) {
             Image(systemName: shelf == .markup ? "doc.text" : shelf.symbol).font(fnt(40, .regular)).foregroundStyle(theme.ink4)
             Text(!q.isEmpty ? "No matches for \"\(app.homeQuery)\"." :
-                 shelf == .markup ? (app.library == .favorites ? "No favorites yet. Long-press a markup and choose Add to Favorites." : "This folder is empty. Import a PDF from Files or create a new one.") :
+                 shelf == .markup ? (app.library == .favorites ? "No favorites yet. Long-press a markup and choose Add to Favorites." : "This folder is empty. Open a PDF with Browse Files… or create a new one.") :
                  shelf == .drawing ? "No drawings yet. Create your first plan set." : "No notebooks yet. Create your first notebook.")
                 .font(fnt(14, .medium)).foregroundStyle(theme.ink3).multilineTextAlignment(.center)
         }

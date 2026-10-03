@@ -3,8 +3,8 @@ import UIKit
 import PDFKit
 import RedlineCore
 
-/// PDFKit viewer plus a transparent input/drawing overlay, with SwiftUI overlays for the comment popup and
-/// the inline text editor. Finger scroll/zoom is native (bounce, direction lock); the Pencil goes to the pages.
+/// Redline's page stack (PDFStackView) plus a transparent input/drawing overlay, with SwiftUI overlays for the comment
+/// popup and the inline text editor. Fingers scroll and pinch; the Pencil goes to the pages.
 struct MarkupCanvas: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
@@ -14,7 +14,7 @@ struct MarkupCanvas: View {
         let mk = editor.mk
         ZStack(alignment: .topLeading) {
             GrainBackground(color: theme.canvas)
-            PDFViewRepresentable(editor: editor, tick: mk.renderTick, viewportTick: mk.viewportTick, canvasColor: UIColor(hex: theme.tokens.canvas))
+            PDFStackRepresentable(editor: editor, tick: mk.renderTick, viewportTick: mk.viewportTick, canvasColor: UIColor(hex: theme.tokens.canvas))
             if let te = mk.textEdit { PDFTextEditor(editor: editor, edit: te) }
             if mk.annotationPopup, mk.textEdit == nil { PDFAnnotationPopup(editor: editor) }
         }
@@ -110,64 +110,42 @@ struct SelectionChrome: View {
 
 // MARK: - PDFView
 
-struct PDFViewRepresentable: UIViewRepresentable {
+struct PDFStackRepresentable: UIViewRepresentable {
     var editor: WorkspaceModel
     var tick: Int
     var viewportTick: Int
     var canvasColor: UIColor
 
-    func makeUIView(context: Context) -> PDFView {
-        let v = PDFView()
-        v.displayMode = .singlePageContinuous
-        v.displayDirection = .vertical
-        v.autoScales = true
-        v.pageBreakMargins = UIEdgeInsets(top: 24, left: 24, bottom: 24, right: 24)
-        v.pageShadowsEnabled = true
-        v.backgroundColor = canvasColor
-        v.minScaleFactor = 0.25
-        v.maxScaleFactor = 6
+    func makeUIView(context: Context) -> PDFStackView {
+        let v = PDFStackView()
+        v.backgroundColor = .clear   // the SwiftUI canvas (with its paper grain) shows through
         v.document = editor.mk.pdf
         editor.mk.pdfView = v
         context.coordinator.attach(to: v)
         return v
     }
 
-    func updateUIView(_ v: PDFView, context: Context) {
+    func updateUIView(_ v: PDFStackView, context: Context) {
         if v.document !== editor.mk.pdf { v.document = editor.mk.pdf }
-        v.backgroundColor = canvasColor
         context.coordinator.editor = editor
-        context.coordinator.configureScrolling(v)
-        context.coordinator.ensureOverlay(in: v)
+        v.syncPages()
+        v.refreshAnnotations()
         context.coordinator.overlay.setNeedsDisplay()
-        if let i = editor.mk.scrollToPage {
-            context.coordinator.scroll(to: i, in: v)
-        }
+        if let i = editor.mk.scrollToPage { context.coordinator.scroll(to: i, in: v) }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(editor: editor) }
 
-    static func dismantleUIView(_ uiView: PDFView, coordinator: Coordinator) {
+    static func dismantleUIView(_ uiView: PDFStackView, coordinator: Coordinator) {
         coordinator.detach()
-    }
-
-    /// PDFKit's internal scroll view (may be nested).
-    static func scrollView(in view: UIView) -> UIScrollView? {
-        for sub in view.subviews {
-            if let sv = sub as? UIScrollView { return sv }
-            if let found = scrollView(in: sub) { return found }
-        }
-        return nil
     }
 
     @MainActor
     final class Coordinator: NSObject {
         var editor: WorkspaceModel
         let overlay: MarkupOverlayView
-        private var observers: [NSObjectProtocol] = []
-        private var offsetObservation: NSKeyValueObservation?
-        /// PDFKit re-applies its own scroll settings when a page fits the view; these put ours back the moment it does.
-        private var settingObservations: [NSKeyValueObservation] = []
         private var pendingScroll: Int? = nil
+        private var observers: [NSObjectProtocol] = []
 
         init(editor: WorkspaceModel) {
             self.editor = editor
@@ -175,91 +153,15 @@ struct PDFViewRepresentable: UIViewRepresentable {
             super.init()
         }
 
-        /// Called from `dismantleUIView` (main actor) — a nonisolated deinit may not touch these.
         func detach() {
             for o in observers { NotificationCenter.default.removeObserver(o) }
             observers.removeAll()
-            offsetObservation?.invalidate()
-            offsetObservation = nil
-            settingObservations.forEach { $0.invalidate() }
-            settingObservations.removeAll()
-
             overlay.removeFromSuperview()
+            overlay.pdfView?.onViewportChange = nil
+            overlay.pdfView?.onPageChange = nil
         }
 
-        func attach(to v: PDFView) {
-            overlay.pdfView = v
-            let center = NotificationCenter.default
-            observers.append(center.addObserver(forName: .PDFViewScaleChanged, object: v, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.viewportChanged() }
-            })
-            observers.append(center.addObserver(forName: .PDFViewPageChanged, object: v, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.pageChanged(v) }
-            })
-            // Keyboard: how much of the view it covers (the comment popup stays above it).
-            observers.append(center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] n in
-                let frame = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .zero
-                MainActor.assumeIsolated { self?.keyboardChanged(frame) }
-            })
-            observers.append(center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.keyboardChanged(.zero) }
-            })
-            if let sv = PDFViewRepresentable.scrollView(in: v) {
-                offsetObservation = sv.observe(\.contentOffset, options: [.new]) { [weak self] _, _ in
-                    MainActor.assumeIsolated { self?.viewportChanged() }
-                }
-                // A single page that fits the view: PDFKit turns the vertical bounce off, which kills the snap-back.
-                settingObservations = [
-                    sv.observe(\.alwaysBounceVertical, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.reapplyScrolling() } },
-                    sv.observe(\.alwaysBounceHorizontal, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.reapplyScrolling() } },
-                    sv.observe(\.isScrollEnabled, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.reapplyScrolling() } },
-                    sv.observe(\.bounces, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.reapplyScrolling() } },
-                    sv.observe(\.contentSize, options: [.new]) { [weak self] _, _ in MainActor.assumeIsolated { self?.reapplyScrolling() } }
-                ]
-            }
-            overlay.onLayout = { [weak self] in self?.reapplyScrolling() }
-            configureScrolling(v)
-            ensureOverlay(in: v)
-        }
-
-        private var reapplying = false
-        private func reapplyScrolling() {
-            guard !reapplying, let v = overlay.pdfView else { return }
-            reapplying = true
-            configureScrolling(v)
-            reapplying = false
-        }
-
-        /// PDFKit may reset its scroll view; re-applied on every layout pass.
-        func configureScrolling(_ v: PDFView) {
-            guard let sv = PDFViewRepresentable.scrollView(in: v) else { return }
-            let direct = [NSNumber(value: UITouch.TouchType.direct.rawValue)]
-            if sv.panGestureRecognizer.allowedTouchTypes != direct { sv.panGestureRecognizer.allowedTouchTypes = direct }
-            if let pinch = sv.pinchGestureRecognizer, pinch.allowedTouchTypes != direct { pinch.allowedTouchTypes = direct }
-            // Rubber-band only along an axis where the content is larger than the view; a page that fits stays put.
-            let fitX = sv.contentSize.width <= sv.bounds.width + 0.5, fitY = sv.contentSize.height <= sv.bounds.height + 0.5
-            if sv.alwaysBounceVertical != !fitY { sv.alwaysBounceVertical = !fitY }
-            if sv.alwaysBounceHorizontal != !fitX { sv.alwaysBounceHorizontal = !fitX }
-            if sv.isDirectionalLockEnabled { sv.isDirectionalLockEnabled = false }
-            if sv.delaysContentTouches { sv.delaysContentTouches = false }
-            if !sv.canCancelContentTouches { sv.canCancelContentTouches = true }
-            if !sv.bounces { sv.bounces = true }
-            if !sv.isScrollEnabled { sv.isScrollEnabled = true }
-        }
-
-        /// Keeps the drawing overlay on top of PDFKit's document view (which PDFKit may recreate).
-        func ensureOverlay(in v: PDFView) {
-            guard let dv = v.documentView else { return }
-            if overlay.superview !== dv {
-                overlay.removeFromSuperview()
-                overlay.frame = dv.bounds
-                overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                dv.addSubview(overlay)
-            } else if overlay.frame != dv.bounds {
-                overlay.frame = dv.bounds
-            }
-        }
-
+        /// How much of the view the keyboard covers (the comment popup stays above it).
         private func keyboardChanged(_ frame: CGRect) {
             guard let v = overlay.pdfView else { return }
             var overlap: CGFloat = 0
@@ -270,20 +172,31 @@ struct PDFViewRepresentable: UIViewRepresentable {
             if editor.mk.keyboardOverlap != overlap { editor.mk.keyboardOverlap = overlap }
         }
 
-        private func viewportChanged() {
-            editor.mk.viewportTick += 1
-            if let v = overlay.pdfView { ensureOverlay(in: v); configureScrolling(v) }
-            overlay.setNeedsDisplay()
+        func attach(to v: PDFStackView) {
+            overlay.pdfView = v
+            let center = NotificationCenter.default
+            observers.append(center.addObserver(forName: UIResponder.keyboardWillChangeFrameNotification, object: nil, queue: .main) { [weak self] n in
+                let frame = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue ?? .zero
+                MainActor.assumeIsolated { self?.keyboardChanged(frame) }
+            })
+            observers.append(center.addObserver(forName: UIResponder.keyboardWillHideNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.keyboardChanged(.zero) }
+            })
+            overlay.frame = v.documentView.bounds
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            v.documentView.addSubview(overlay)
+            v.onViewportChange = { [weak self] in
+                guard let self else { return }
+                self.editor.mk.viewportTick += 1
+                self.overlay.setNeedsDisplay()
+            }
+            v.onPageChange = { [weak self] i in
+                guard let self, self.pendingScroll == nil else { return }
+                if i != self.editor.pageIndex { self.editor.pageIndex = i }
+            }
         }
 
-        private func pageChanged(_ v: PDFView) {
-            viewportChanged()
-            guard pendingScroll == nil, let p = v.currentPage, let pdf = editor.mk.pdf else { return }
-            let i = pdf.index(for: p)
-            if i != editor.pageIndex { editor.pageIndex = i }
-        }
-
-        func scroll(to i: Int, in v: PDFView) {
+        func scroll(to i: Int, in v: PDFStackView) {
             guard pendingScroll != i, let page = editor.mk.page(i) else { return }
             pendingScroll = i
             Task { @MainActor [weak self] in
@@ -299,14 +212,7 @@ struct PDFViewRepresentable: UIViewRepresentable {
 
 final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
     unowned let editor: WorkspaceModel
-    weak var pdfView: PDFView?
-    /// Called whenever PDFKit lays the document view out (page fit, rotation, zoom).
-    var onLayout: (() -> Void)?
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        onLayout?()
-    }
+    weak var pdfView: PDFStackView?
     private var active: UITouch?
     private var dragPage: PDFPage?
 
@@ -331,7 +237,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
     /// While this overlay owns a drag (moving a selection, a handle, the ruler, a marquee…) the scroll view must not
     /// pan or zoom with the same finger. Disabling its recognisers cancels their tracking of the touch.
     private func captureScroll(_ on: Bool) {
-        guard let v = pdfView, let sv = PDFViewRepresentable.scrollView(in: v) else { return }
+        guard let sv = pdfView else { return }
         if sv.panGestureRecognizer.isEnabled == on { sv.panGestureRecognizer.isEnabled = !on }
         if let p = sv.pinchGestureRecognizer, p.isEnabled == on { p.isEnabled = !on }
     }
@@ -362,9 +268,9 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         return v.convert(v.convert(r, from: page), to: self)
     }
 
-    /// Page units → overlay units, measured through the same conversion the points use. PDFKit zooms its document
-    /// view (which this overlay lives in), so this is NOT simply `scaleFactor`; using that drew live strokes too thick.
-    private func pageScale(_ v: PDFView) -> CGFloat {
+    /// Page units → overlay units, measured through the same conversion the points use (during a pinch the document
+    /// view is transformed, so this is not simply `scaleFactor`).
+    private func pageScale(_ v: PDFStackView) -> CGFloat {
         guard let page = v.currentPage else { return v.scaleFactor }
         let a = overlayPoint(.zero, on: page), b = overlayPoint(CGPoint(x: 100, y: 0), on: page)
         return max(0.01, hypot(b.x - a.x, b.y - a.y) / 100)
@@ -620,11 +526,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         if editor.ruler.on, let page = editor.mk.page(editor.pageIndex) { drawRuler(cg, page: page, accent: accent) }
     }
 
-    private func visiblePages(_ v: PDFView) -> [PDFPage] {
-        guard let pdf = v.document, let cur = v.currentPage else { return [] }
-        let i = pdf.index(for: cur)
-        return [i - 1, i, i + 1].compactMap { $0 >= 0 && $0 < pdf.pageCount ? pdf.page(at: $0) : nil }
-    }
+    private func visiblePages(_ v: PDFStackView) -> [PDFPage] { v.visiblePages }
 
     private func strokePolyline(_ cg: CGContext, _ pts: [CGPoint], close: Bool) {
         guard let f = pts.first else { return }

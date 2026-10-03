@@ -9,6 +9,8 @@ annotation engine, one toolbar behaviour, one Style Popover and one set of colou
   Home is a two-column file browser: the left column lists Markups (Recents, Favorites, the On My iPad ›
   Redline folder tree, Browse Files… for iCloud Drive, OneDrive, Dropbox and other Files providers) plus
   Drawings and Notes rows that expand to recent documents; the right pane shows Recents rails, a folder, or a gallery.
+  PDFs picked in Files (or sent with "Open in Redline") open in place: nothing is copied, edits are written back
+  where the file lives, and removing the markup from the library never deletes the file.
 - **Drawings** — layered plan sets: a Base layer plus trace layers with a white "veil", lock/hide,
   flatten down / flatten all.
 - **Notes** — paged notebooks: paper colours, templates, tags, single page or facing spread, and a
@@ -49,6 +51,10 @@ swift test
   directory. Imported PDFs are copied into `Documents/PDFs` and "Save to Files" exports go to
   `Documents/Exports`, both visible in the Files app under On My iPad › Redline. PDFs can also be
   opened from Files or the share sheet ("Open in Redline").
+- The markup viewer is Redline's own (`PDFStackView`): a scroll view stacking the pages, page content rendered by
+  PDFKit into tiles, annotations drawn per page on the main thread so edits show instantly. PDFKit still parses the
+  file, renders page content, extracts text and reads / writes the annotation layer; it no longer owns scrolling,
+  zooming, bounce or gestures.
 - Markups are real PDFs edited through PDFKit: every tool creates a standard PDF annotation (Ink, Highlight /
   Underline / StrikeOut / Squiggly with text quads, Square, Circle, Line, FreeText, Text notes, Widgets), with author,
   date, contents, replies (`IRT`) and review state, so the file opens with its marks in any PDF app. Existing
@@ -84,8 +90,10 @@ swift test
 - Selecting an annotation shows a bar beside it (N selected · Comment · Properties · Delete · ×). Properties drops
   the style editor under the bar and restyles the selection itself; Comment (or a badge tap, or placing a sticky
   note) opens the comment popup: text, status, replies (the reply field appears after tapping Reply).
-- Highlights, underlines, strikeouts and squiggles are drawn by Redline at their real opacity (PDFKit paints
-  highlights solid whatever the opacity says) and carry that look as an appearance stream. They are anchored to the
+- Pen and marker ink, and highlights, underlines, strikeouts and squiggles, are drawn by Redline at their real
+  opacity (PDFKit paints them solid, and doubles up where strokes overlap); an annotation's strokes are composited
+  in one layer so joins and overlaps stay even, markers multiply over the page, and the look is written as the
+  appearance stream (rebuilt only for annotations changed since the last save). They are anchored to the
   page text: selectable and restylable, never moved or resized. Annotations with comment text or replies show a speech-bubble
   badge in their own colour just above the ink; tapping it opens the popup. Sidebar rows expand in place to show the
   full text, Edit / Delete and replies.
@@ -100,7 +108,8 @@ swift test
   never scrolls. Zoomed-out pages are centred with the larger margins that leaves.
 - PDF pages render on a background queue; a neutral placeholder shows until each page image is ready.
 - The eraser cuts only the touched part out of pen ink (shapes, arrows, clouds and leaders stay whole) and shows
-  its outline while erasing; its four presets are sizes.
+  its outline while erasing; its four presets are sizes. One eraser drag is one undo step, however many strokes it
+  cut or removed. Double-tap-to-zoom is off on the PDF (pinch zooms), so quick Pencil taps never zoom.
 - Select taps a single stroke: one stroke of a multi-stroke pen annotation is pulled out into its own annotation
   and selected alone, so it can be moved by itself; the lasso does the same for the strokes it encloses.
 - Lines and arrows stay standard Line annotations but are drawn with round caps and joins on screen and in their
@@ -113,7 +122,9 @@ swift test
   filled in when placed). You can create either kind in the gallery and long-press a stamp to pin it to a
   Favorites tab. Stamps sit at the same -2° tilt as their preview, on screen and in the appearance stream.
 - Cloud, arrow and callout previews show the real shape while dragging (the callout shows its arrow, leader and
-  empty box). Polylines are placed point by point: tap to add a vertex, tap the last one to finish, tap the first
+  empty box). A callout's elbow sits on the midpoint of whichever side of the box faces the arrow tip and only slides
+  straight out from that side; dragging the box moves the box alone with the tip fixed (the elbow switches sides as
+  needed), dragging the leader moves the whole callout, and the tip handle re-aims the arrow. Polylines are placed point by point: tap to add a vertex, tap the last one to finish, tap the first
   to close.
 - Measure tools, edit text / insert image / link / crop and append/extract pages currently show a "coming soon"
   toast, matching the prototype's preview-only behaviour.

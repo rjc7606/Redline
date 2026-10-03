@@ -97,7 +97,8 @@ enum AnnotationFactory {
         let w = CGFloat(style.width)
         let all = paths.flatMap { $0 }
         let b = bounds(for: all, inset: w / 2 + 2)
-        let a = PDFAnnotation(bounds: b, forType: .ink, withProperties: nil)
+        let a = RedlineInk(bounds: b, forType: .ink, withProperties: nil)
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
         a.color = PDFColors.uiColor(style.color)
         let border = PDFBorder()
         border.lineWidth = w
@@ -456,8 +457,10 @@ struct AnnotationSnapshot {
 }
 
 /// Reversible edit on the PDF.
-enum PDFCommand {
+indirect enum PDFCommand {
     case add(page: PDFPage, annots: [PDFAnnotation])
     case remove(page: PDFPage, annots: [PDFAnnotation])
     case change(annots: [(PDFAnnotation, AnnotationSnapshot)])
+    /// Several edits that undo and redo as one step (an eraser drag that cuts some strokes and removes others).
+    case group([PDFCommand])
 }

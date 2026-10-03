@@ -46,7 +46,8 @@ struct TextEdit: Equatable {
 enum MkDrag {
     case draw
     case marquee(start: CGPoint)
-    case move(start: CGPoint, snaps: [(PDFAnnotation, AnnotationSnapshot)])
+    /// `boxOnly`: a callout box dragged by itself — the leader (also in `snaps` for undo) re-lays out around its fixed tip.
+    case move(start: CGPoint, snaps: [(PDFAnnotation, AnnotationSnapshot)], boxOnly: Bool)
     case resize(center: CGPoint, d0: CGFloat, snaps: [(PDFAnnotation, AnnotationSnapshot)])
     case handle(leader: PDFAnnotation, index: Int, snap: AnnotationSnapshot)
     case erase
@@ -444,7 +445,6 @@ final class WorkspaceModel {
         case .always: return true
         case .never: return false
         case .auto:
-            if UIPencilInteraction.prefersPencilOnlyDrawing { return false }
             if fingerInkAllowed == nil { fingerInkAllowed = !isPencil }
             return fingerInkAllowed ?? true
         }

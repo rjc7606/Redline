@@ -349,8 +349,10 @@ public struct Document: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var comments: [Comment]
     /// Paper colour for plan sets (Drawing).
     public var paper: Paper
-    /// File name (inside the app's documents directory) of an imported PDF.
+    /// File name inside the app's PDFs folder, or "ext:<id>" for a PDF opened in place elsewhere in Files.
     public var pdfFile: String?
+    /// Security-scoped bookmark of a PDF opened in place (edited where it lives; never copied).
+    public var pdfBookmark: Data?
     /// Page IDs the user bookmarked (Markup).
     public var bookmarks: [ID]
     /// Logical page size override (imported PDFs keep their own aspect ratio).

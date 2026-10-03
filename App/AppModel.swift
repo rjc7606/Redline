@@ -70,6 +70,46 @@ final class AppModel {
 
     init() {
         store = RedlineStore(data: AppModel.load() ?? Seed.data())
+        resolveExternalPDFs()
+    }
+
+    /// Re-attaches PDFs that were opened in place (security-scoped bookmarks) so they load, render and save where they live.
+    private func resolveExternalPDFs() {
+        for d in store.data.docs where d.type == .markup {
+            guard let f = d.pdfFile, pdf.isExternal(f), let bm = d.pdfBookmark else { continue }
+            var stale = false
+            guard let url = try? URL(resolvingBookmarkData: bm, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else { continue }
+            _ = url.startAccessingSecurityScopedResource()
+            pdf.register(f, url: url)
+            if stale, let fresh = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+                store.patch(d.id) { $0.pdfBookmark = fresh }
+            }
+        }
+    }
+
+    /// Opens PDFs where they live (Files, iCloud Drive, other providers): no copy, edits are written back in place.
+    /// A PDF that is already in the library just opens. Returns the id of the last document opened.
+    @discardableResult
+    func openInPlace(_ urls: [URL], folder: String = "") -> ID? {
+        var last: ID? = nil
+        for url in urls where url.pathExtension.lowercased() == "pdf" {
+            let std = url.standardizedFileURL
+            if let existing = store.data.docs.first(where: { d in d.pdfFile.flatMap { pdf.externalURL($0) }?.standardizedFileURL == std
+                || (d.pdfFile.map { !pdf.isExternal($0) && pdf.url(for: $0).standardizedFileURL == std } ?? false) }) {
+                last = existing.id
+                continue
+            }
+            _ = url.startAccessingSecurityScopedResource()   // kept while the document stays in the library
+            guard let bm = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) else { flash("Couldn't open \(url.lastPathComponent)"); continue }
+            let key = "ext:" + IDGen.make()
+            pdf.register(key, url: url)
+            guard let doc = pdf.document(key), doc.pageCount > 0, let first = doc.page(at: 0) else { pdf.forget(key); flash("Couldn't open \(url.lastPathComponent)"); continue }
+            let d = store.createDocument(type: .markup, name: url.deletingPathExtension().lastPathComponent, pageCount: doc.pageCount, pdfFile: key)
+            store.patch(d.id) { $0.sheetSize = PDFService.canvasSize(for: first); $0.folder = folder; $0.pdfBookmark = bm }
+            last = d.id
+        }
+        scheduleSave()
+        return last
     }
 
     // MARK: settings passthrough
@@ -169,38 +209,29 @@ final class AppModel {
     func deleteDocument(_ id: ID) {
         if openDocs.contains(id) { editors[id] = nil; openDocs.removeAll { $0 == id }; if editor?.docID == id { editor = nil; screen = .home } }
         if let doc = store.document(id), let f = doc.pdfFile, !store.data.docs.contains(where: { $0.id != id && $0.pdfFile == f }) {
-            pdf.forget(f)
-            try? FileManager.default.removeItem(at: pdf.url(for: f))
+            // Removing a markup only forgets a PDF opened in place; it is never deleted from where it lives.
+            if pdf.isExternal(f) { pdf.externalURL(f)?.stopAccessingSecurityScopedResource(); pdf.forget(f) }
+            else { pdf.forget(f); try? FileManager.default.removeItem(at: pdf.url(for: f)) }
         }
         store.deleteDocument(id)
         scheduleSave()
     }
 
-    /// Imports several PDFs (Browse Files…) into a library folder without opening them.
+    /// Browse Files…: open the picked PDFs in place; a single pick opens straight away.
     func importPDFs(_ urls: [URL], into folder: String) {
-        var n = 0
-        for url in urls {
-            guard let r = importPDF(from: url) else { continue }
-            let doc = store.createDocument(type: .markup, name: url.deletingPathExtension().lastPathComponent, pageCount: r.pages, pdfFile: r.file)
-            store.patch(doc.id) { $0.sheetSize = r.sheetSize; $0.folder = folder }
-            n += 1
-        }
-        scheduleSave()
-        flash(n == 0 ? "Nothing imported" : "Imported " + Formatting.plural(n, "PDF"))
+        guard let last = openInPlace(urls, folder: folder) else { flash("Nothing opened"); return }
+        if urls.count == 1 { openDocument(last) } else { flash("Added " + Formatting.plural(urls.count, "PDF")) }
     }
 
-    /// "Open in Redline" from Files / Share sheet: import the PDF as a new markup and open it.
+    /// "Open in Redline" from Files / the share sheet: the PDF opens in place.
     func openPDF(from url: URL) {
-        guard url.pathExtension.lowercased() == "pdf", let r = importPDF(from: url) else {
+        guard url.pathExtension.lowercased() == "pdf", let id = openInPlace([url]) else {
             flash("Redline can open PDF files")
             return
         }
-        let doc = store.createDocument(type: .markup, name: url.deletingPathExtension().lastPathComponent, pageCount: r.pages, pdfFile: r.file)
-        store.patch(doc.id) { $0.sheetSize = r.sheetSize }
         settings.shelf = .markup
         settingsOpen = false
-        scheduleSave()
-        openDocument(doc.id)
+        openDocument(id)
     }
 
     /// Records an undoable mutation on a document and schedules a save.
