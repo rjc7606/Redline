@@ -84,14 +84,6 @@ extension WorkspaceModel {
                 }
             }
             walk(root, depth: 0)
-            return out
-        }
-        if isPDF {
-            for i in 0..<mk.pageCount { out.append(OutlineItem(id: "p\(i)", label: "Page \(i + 1)", pageIndex: i, depth: 0)) }
-            return out
-        }
-        for (i, pg) in doc.pages.enumerated() {
-            out.append(OutlineItem(id: pg.id, label: pg.label.isEmpty ? "Page \(i + 1)" : pg.label, pageIndex: i, depth: 0))
         }
         return out
     }
@@ -111,23 +103,39 @@ extension WorkspaceModel {
 
     private func mkOutlineChanged() { mkMarkDirty(); mk.renderTick += 1 }
 
-    /// New entry for the current page, after `after` (as a sibling) or at the end of the root.
-    func mkOutlineAdd(label: String, after: PDFOutline? = nil, asChildOf parent: PDFOutline? = nil) {
-        guard let root = mkOutlineRoot() else { return }
+    /// New entry for the current page: a level-1 entry at the end of the outline, or the last child of `parent`.
+    @discardableResult
+    func mkOutlineAdd(asChildOf parent: PDFOutline? = nil) -> PDFOutline? {
+        guard let root = mkOutlineRoot() else { return nil }
         let o = PDFOutline()
-        o.label = label
+        o.label = "Page \(pageIndex + 1)"
         o.destination = mkOutlineDestination(pageIndex)
-        if let parent { parent.insertChild(o, at: parent.numberOfChildren) }
-        else if let after, let p = after.parent { p.insertChild(o, at: after.index + 1) }
-        else { root.insertChild(o, at: root.numberOfChildren) }
+        if let parent { parent.insertChild(o, at: parent.numberOfChildren) } else { root.insertChild(o, at: root.numberOfChildren) }
+        mkOutlineChanged()
+        return o
+    }
+
+    /// Reorder from the flat list: the moved entry (with its children) becomes a sibling of the entry it lands on.
+    func mkOutlineMove(items: [OutlineItem], from: IndexSet, to: Int) {
+        guard let f = from.first, items.indices.contains(f), let node = items[f].node else { return }
+        if to >= items.count {
+            guard let root = mkOutlineRoot() else { return }
+            node.removeFromParent(); root.insertChild(node, at: root.numberOfChildren)
+        } else {
+            guard let anchor = items[to].node, anchor !== node, let p = anchor.parent else { return }
+            // never into its own branch
+            var q: PDFOutline? = anchor
+            while let x = q { if x === node { return }; q = x.parent }
+            node.removeFromParent()
+            p.insertChild(node, at: anchor.index)
+        }
         mkOutlineChanged()
     }
 
     func mkOutlineRename(_ o: PDFOutline, to label: String) {
-        let t = label.trimmingCharacters(in: .whitespaces)
-        guard !t.isEmpty else { return }
-        o.label = t
-        mkOutlineChanged()
+        guard o.label != label else { return }
+        o.label = label
+        mkMarkDirty()   // no render tick: the field being typed in must keep focus
     }
 
     /// Becomes the last child of the previous sibling.
@@ -170,82 +178,106 @@ extension WorkspaceModel {
 struct OutlinePanel: View {
     @Environment(\.theme) private var theme
     var editor: WorkspaceModel
-    @State private var renameTarget: PDFOutline? = nil
-    @State private var renameOn = false
-    @State private var draft = ""
-    @State private var addOn = false
-    @State private var addParent: PDFOutline? = nil
+    @State private var reordering = false
+    @FocusState private var focused: String?
 
     var body: some View {
         let _ = editor.mk.renderTick
         let items = editor.outlineItems
-        let editable = editor.isPDF
-        ScrollView {
-            VStack(spacing: 2) {
-                if editable {
-                    Button { addParent = nil; renameTarget = nil; draft = "Page \(editor.pageIndex + 1)"; addOn = true } label: {
-                        HStack(spacing: 6) { Image(systemName: "plus").font(fnt(14, .semibold)); Text("Add to outline").font(fnt(14, .semibold)) }
-                            .foregroundStyle(theme.ink1).frame(maxWidth: .infinity).frame(height: 36)
-                            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.bg3))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.bottom, 8)
-                }
-                ForEach(items) { o in
-                    HStack(spacing: 6) {
-                        if let node = o.node, o.hasChildren {
-                            Button { editor.mkOutlineToggle(node) } label: {
-                                Image(systemName: "chevron.right").font(fnt(11, .bold)).foregroundStyle(theme.ink4)
-                                    .rotationEffect(.degrees(editor.mk.collapsedOutline.contains(o.id) ? 0 : 90))
-                                    .frame(width: 18, height: 18).contentShape(Rectangle())
-                            }.buttonStyle(.plain)
-                        } else {
-                            Color.clear.frame(width: 18, height: 18)
+        VStack(spacing: 0) {
+            if reordering {
+                // Native list reorder: drag the handles; rows slide to show the drop.
+                List {
+                    ForEach(items) { o in
+                        HStack(spacing: 6) {
+                            Text(o.label).font(fnt(o.depth == 0 ? 14 : 13, o.depth == 0 ? .semibold : .medium))
+                                .foregroundStyle(o.depth == 0 ? theme.ink1 : theme.ink2).lineLimit(1)
+                            Spacer(minLength: 0)
+                            Text("p.\(o.pageIndex + 1)").font(fnt(11, .semibold)).monospacedDigit().foregroundStyle(theme.ink4)
                         }
-                        Text(o.label).font(fnt(o.depth == 0 ? 14 : 13, o.depth == 0 ? .semibold : .medium))
-                            .foregroundStyle(o.depth == 0 ? theme.ink1 : theme.ink2).lineLimit(1)
-                        Spacer(minLength: 0)
-                        Text("p.\(o.pageIndex + 1)").font(fnt(11, .semibold)).monospacedDigit().foregroundStyle(theme.ink4)
+                        .padding(.leading, Double(o.depth) * 16)
+                        .listRowBackground(Color.clear)
+                        .listRowInsets(EdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 8))
                     }
-                    .padding(.trailing, 10)
-                    .padding(.leading, 6 + Double(o.depth) * 16)
-                    .frame(height: o.depth == 0 ? 44 : 36)
-                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(o.pageIndex == editor.pageIndex && o.depth == 0 ? theme.hov2 : .clear))
-                    .contentShape(Rectangle())
-                    .onTapGesture { editor.setPage(o.pageIndex) }
-                    .contextMenu {
-                        if let node = o.node, editable {
-                            Button("Rename", systemImage: "pencil") { renameTarget = node; draft = o.label; renameOn = true }
-                            Button("Add entry below", systemImage: "plus") { addParent = nil; renameTarget = node; draft = "Page \(editor.pageIndex + 1)"; addOn = true }
-                            Button("Add child entry", systemImage: "arrow.turn.down.right") { addParent = node; renameTarget = nil; draft = "Page \(editor.pageIndex + 1)"; addOn = true }
-                            Divider()
-                            Button("Indent", systemImage: "increase.indent") { editor.mkOutlineIndent(node) }
-                            Button("Outdent", systemImage: "decrease.indent") { editor.mkOutlineOutdent(node) }
-                            Button("Move up", systemImage: "arrow.up") { editor.mkOutlineMove(node, by: -1) }
-                            Button("Move down", systemImage: "arrow.down") { editor.mkOutlineMove(node, by: 1) }
-                            Divider()
-                            Button("Point at this page", systemImage: "doc.text") { editor.mkOutlineRetarget(node) }
-                            Button("Delete", systemImage: "trash", role: .destructive) { editor.mkOutlineDelete(node) }
+                    .onMove { from, to in editor.mkOutlineMove(items: items, from: from, to: to) }
+                }
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .environment(\.editMode, .constant(.active))
+            } else {
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(items) { o in row(o) }
+                        if items.isEmpty {
+                            Text("No outline yet.").font(fnt(12.5)).foregroundStyle(theme.ink4).padding(.vertical, 18)
                         }
                     }
-                }
-                if items.isEmpty {
-                    Text(editable ? "No outline yet. Add an entry for the current page." : "No outline.").font(fnt(12.5)).foregroundStyle(theme.ink4).padding(.vertical, 18)
+                    .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 12)
                 }
             }
-            .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 12)
+            // Add (a level-1 entry for the current page, at the end) and Reorder, always at the bottom.
+            HStack(spacing: 8) {
+                SecondaryButton(label: "Add", symbol: "plus") {
+                    reordering = false
+                    if let o = editor.mkOutlineAdd() { focused = ObjectIdentifier(o).debugDescription }
+                }
+                .disabled(!editor.isPDF)
+                Spacer(minLength: 0)
+                SecondaryButton(label: reordering ? "Done" : "Reorder", symbol: reordering ? "checkmark" : "arrow.up.arrow.down", tint: reordering ? theme.accent : nil) {
+                    focused = nil
+                    withAnimation(.easeOut(duration: 0.15)) { reordering.toggle() }
+                }
+                .disabled(items.count < 2 && !reordering)
+            }
+            .padding(12)
+            .overlay(alignment: .top) { Rectangle().fill(theme.line).frame(height: 1) }
         }
-        .alert("Rename entry", isPresented: $renameOn) {
-            TextField("Title", text: $draft)
-            Button("Rename") { if let t = renameTarget { editor.mkOutlineRename(t, to: draft) } }
-            Button("Cancel", role: .cancel) {}
+    }
+
+    /// One entry: chevron for branches, the name editable in place, the page; tap elsewhere on the row to go there.
+    private func row(_ o: OutlineItem) -> some View {
+        HStack(spacing: 6) {
+            if let node = o.node, o.hasChildren {
+                Button { editor.mkOutlineToggle(node) } label: {
+                    Image(systemName: "chevron.right").font(fnt(11, .bold)).foregroundStyle(theme.ink4)
+                        .rotationEffect(.degrees(editor.mk.collapsedOutline.contains(o.id) ? 0 : 90))
+                        .frame(width: 18, height: 18).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+            } else {
+                Color.clear.frame(width: 18, height: 18)
+            }
+            if let node = o.node {
+                TextField("Title", text: Binding(get: { node.label ?? "" }, set: { editor.mkOutlineRename(node, to: $0) }))
+                    .textFieldStyle(.plain)
+                    .font(fnt(o.depth == 0 ? 14 : 13, o.depth == 0 ? .semibold : .medium))
+                    .foregroundStyle(o.depth == 0 ? theme.ink1 : theme.ink2)
+                    .focused($focused, equals: o.id)
+                    .onSubmit { focused = nil }
+            } else {
+                Text(o.label).font(fnt(14, .semibold)).foregroundStyle(theme.ink1).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Button { focused = nil; editor.setPage(o.pageIndex) } label: {
+                Text("p.\(o.pageIndex + 1)").font(fnt(11, .semibold)).monospacedDigit().foregroundStyle(theme.ink4)
+                    .frame(height: 28).padding(.horizontal, 6).contentShape(Rectangle())
+            }.buttonStyle(.plain)
         }
-        .alert("Outline entry", isPresented: $addOn) {
-            TextField("Title", text: $draft)
-            Button("Add") { editor.mkOutlineAdd(label: draft.isEmpty ? "Page \(editor.pageIndex + 1)" : draft, after: addParent == nil ? renameTarget : nil, asChildOf: addParent) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Points at page \(editor.pageIndex + 1).")
+        .padding(.trailing, 4)
+        .padding(.leading, 6 + Double(o.depth) * 16)
+        .frame(height: o.depth == 0 ? 44 : 36)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(focused == o.id ? theme.card : (o.pageIndex == editor.pageIndex && o.depth == 0 ? theme.hov2 : .clear)))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(theme.accent, lineWidth: focused == o.id ? 1.5 : 0))
+        .contentShape(Rectangle())
+        .onTapGesture { focused = nil; editor.setPage(o.pageIndex) }
+        .contextMenu {
+            if let node = o.node {
+                Button("Add child entry", systemImage: "arrow.turn.down.right") { if let c = editor.mkOutlineAdd(asChildOf: node) { focused = ObjectIdentifier(c).debugDescription } }
+                Button("Indent", systemImage: "increase.indent") { editor.mkOutlineIndent(node) }
+                Button("Outdent", systemImage: "decrease.indent") { editor.mkOutlineOutdent(node) }
+                Divider()
+                Button("Point at this page", systemImage: "doc.text") { editor.mkOutlineRetarget(node) }
+                Button("Delete", systemImage: "trash", role: .destructive) { editor.mkOutlineDelete(node) }
+            }
         }
     }
 }

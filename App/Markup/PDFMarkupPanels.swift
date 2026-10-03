@@ -323,6 +323,9 @@ struct PDFOrganizePages: View {
     @State private var target: Int? = nil          // where it would land
     @State private var dragPoint: CGPoint = .zero  // finger, in grid space
     @State private var tileFrames = TileFrameStore()
+    /// Slot rectangles captured when a drag starts (reading order). The tiles slide during the drag, so the live
+    /// frames can't be used for the target — that is what made the preview jump and snap back.
+    @State private var slots: [CGRect] = []
 
     var body: some View {
         let tick = editor.mk.renderTick
@@ -362,6 +365,7 @@ struct PDFOrganizePages: View {
                 .padding(.horizontal, 24).padding(.vertical, 16)
             }
             .coordinateSpace(name: "organize")
+            .scrollDisabled(dragging != nil)
             .onPreferenceChange(TileFrameKey.self) { [tileFrames] frames in tileFrames.map = frames }
             .overlay(alignment: .topLeading) {
                 // The lifted tile follows the finger.
@@ -396,15 +400,22 @@ struct PDFOrganizePages: View {
                         .sequenced(before: DragGesture(minimumDistance: 4, coordinateSpace: .named("organize")))
                         .onChanged { value in
                             guard case .second(true, let drag?) = value else { return }
-                            dragging = i
+                            if dragging == nil {
+                                // Freeze the slot layout for the whole drag.
+                                slots = tileFrames.map.sorted { $0.key < $1.key }.map(\.value)
+                                dragging = i
+                                selected = i
+                            }
                             dragPoint = drag.location
-                            selected = i
-                            // Target = the slot whose tile is nearest the finger.
-                            if let nearest = tileFrames.map.min(by: { dist($0.value, drag.location) < dist($1.value, drag.location) }) { target = nearest.key }
+                            // Target = the slot nearest the finger (slots never move; the tiles do).
+                            if let t = slots.indices.min(by: { dist(slots[$0], drag.location) < dist(slots[$1], drag.location) }) { target = t }
                         }
-                        .onEnded { _ in
-                            if let d = dragging, let t = target, d != t { editor.mkMovePage(from: d, to: t); selected = t }
-                            dragging = nil; target = nil
+                        .onEnded { value in
+                            if case .second(true, let drag?) = value, let d = dragging {
+                                let t = slots.indices.min(by: { dist(slots[$0], drag.location) < dist(slots[$1], drag.location) }) ?? target ?? d
+                                if d != t { editor.mkMovePage(from: d, to: t); selected = t }
+                            }
+                            dragging = nil; target = nil; slots = []
                         }
                 )
             Text("Page \(i + 1)").font(fnt(12, .semibold)).foregroundStyle(theme.ink3)
