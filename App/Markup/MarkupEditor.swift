@@ -34,6 +34,14 @@ struct MarkupComment: Identifiable {
     var markCount: Int
 }
 
+/// A snap guide drawn by the overlay while something is placed or moved (page space).
+struct SnapGuide {
+    enum Kind { case align, touch, gap }
+    var kind: Kind
+    var a: CGPoint
+    var b: CGPoint
+}
+
 /// PDFKit-backed markup state (Markups only). Stored on WorkspaceModel as `mk`.
 @MainActor
 @Observable
@@ -92,6 +100,8 @@ final class MarkupState {
     var collapsedOutline: Set<String> = []
     /// Form field being filled in place (text / date / signature / dropdown), outside the Forms tab.
     var fieldEdit: PDFAnnotation? = nil
+    /// Guides for the current snap (cleared when the touch ends).
+    var snapGuides: [SnapGuide] = []
     /// Watches the open file for edits made by other apps.
     @ObservationIgnored var presenter: PDFFilePresenter? = nil
     /// Polyline being placed point by point.
@@ -722,7 +732,13 @@ extension WorkspaceModel {
             let st = style(for: tool)
             var color = PDFColors.uiColor(st.color)
             if tool == .redact { color = .black }
-            mk.live = LiveMark(page: page, tool: tool, points: [p], color: color, width: CGFloat(st.width), opacity: CGFloat(st.opacity ?? ToolStyles.defaultOpacity(for: tool)))
+            var start = p
+            if info.kind == .shape, tool != .polyline {
+                let sp = mkSnapPoint(p, page: page)
+                start = sp.point
+                mk.snapGuides = sp.guides
+            }
+            mk.live = LiveMark(page: page, tool: tool, points: [start], color: color, width: CGFloat(st.width), opacity: CGFloat(st.opacity ?? ToolStyles.defaultOpacity(for: tool)))
             mkDrag = .draw
             mkDrawMode = .free
             if tool.kind == .ink, ruler.on {
@@ -778,7 +794,12 @@ extension WorkspaceModel {
                     live.quads = sel.selectionsByLine().map { $0.bounds(for: page) }.filter { $0.width > 0.5 }
                 } else { live.quads = [] }
             case .shape:
-                if live.tool == .polyline || live.tool == .polygon { live.points.append(p) } else { live.points = [live.points[0], p] }
+                if live.tool == .polyline || live.tool == .polygon { live.points.append(p) }
+                else {
+                    let sp = mkSnapPoint(p, page: page)
+                    mk.snapGuides = sp.guides
+                    live.points = [live.points[0], sp.point]
+                }
             default: break
             }
             mk.live = live
@@ -793,8 +814,17 @@ extension WorkspaceModel {
             if !mkLassoMode { mk.marquee = CGRect(x: min(start.x, p.x), y: min(start.y, p.y), width: abs(p.x - start.x), height: abs(p.y - start.y)) }
             mk.renderTick += 1
         case .move(let start, let snaps, let boxOnly):
-            let dx = p.x - start.x, dy = p.y - start.y
+            var dx = p.x - start.x, dy = p.y - start.y
             if !mkDragMoved { if hypot(dx, dy) < 2 / mkZoom { return }; mkDragMoved = true; mkPerform(.change(annots: snaps), alreadyApplied: true) }
+            // Snap the moving set (as one rect) to the other annotations and the page.
+            let moving = snaps.filter { !(boxOnly && $0.0.subtype == "Ink" && $0.0.redlineTool == .callout) }
+            if let first = moving.first {
+                var u = first.1.bounds
+                for (_, s) in moving.dropFirst() { u = u.union(s.bounds) }
+                let sn = mkSnapRect(u.offsetBy(dx: dx, dy: dy), page: page, excluding: snaps.map { $0.0 })
+                dx += sn.dx; dy += sn.dy
+                mk.snapGuides = sn.guides
+            }
             for (a, snap) in snaps {
                 // Dragging a callout's box alone: the leader stays put here and is re-laid around its fixed tip below.
                 if boxOnly, a.subtype == "Ink", a.redlineTool == .callout { continue }
@@ -811,6 +841,9 @@ extension WorkspaceModel {
                 // Text box: the bottom-right corner sets width and height; the text keeps its size and rewraps.
                 let a = first.0, b = first.1.bounds
                 let font = a.font ?? RedlineFonts.page(size: 16, weight: nil)
+                let sp = mkSnapPoint(p, page: page, excluding: [a])
+                mk.snapGuides = sp.guides
+                let p = sp.point
                 let w = max(40, p.x - b.minX)
                 let need = TextBoxRenderer.fittingSize(text: a.contents ?? "", font: font, maxWidth: w).height
                 let h = max(need, b.maxY - p.y)
@@ -869,6 +902,7 @@ extension WorkspaceModel {
     func mkPointerUp(_ s: PointerSample, page: PDFPage, at p: CGPoint) {
         guard let d = mkDrag else { return }
         mkDrag = nil
+        mkClearSnap()
         if mk.eraserPoint != nil { mk.eraserPoint = nil; mk.eraserPage = nil; mk.renderTick += 1 }
         switch d {
         case .draw:
@@ -938,6 +972,7 @@ extension WorkspaceModel {
     func mkPointerCancel() {
         if case .erase? = mkDrag, let pg = mk.eraserPage { mkEndErase(on: pg) }
         mkDrag = nil
+        mkClearSnap()
         mk.live = nil
         mk.eraserPoint = nil; mk.eraserPage = nil
         mk.lasso = []; mk.marquee = nil; mk.lassoPage = nil
@@ -1044,7 +1079,8 @@ extension WorkspaceModel {
         }
     }
 
-    private func mkTap(at p: CGPoint, page: PDFPage) {
+    private func mkTap(at rawPoint: CGPoint, page: PDFPage) {
+        let p = mkSnapPoint(rawPoint, page: page).point
         let info = tool.info
         let author = app.author
         switch info.kind {
@@ -1114,6 +1150,95 @@ extension WorkspaceModel {
         mkMarkDirty()
         app.flash("Fill removed")
     }
+
+    // MARK: - Snapping (alignment · touching · spacing)
+
+    private var mkSnapTol: CGFloat { 8 / CGFloat(mkZoom) }
+
+    /// Rects worth snapping to on a page: every drawn annotation except the ones being moved (and bookkeeping notes).
+    private func mkSnapTargets(on page: PDFPage, excluding: [PDFAnnotation]) -> [CGRect] {
+        page.annotations.filter { a in
+            !a.isPopup && !a.isReply && !a.isStateAnnotation && !excluding.contains { $0 === a }
+                && a.bounds.width > 0.5 && a.bounds.height > 0.5
+        }.map(\.bounds)
+    }
+
+    private func mkPageRect(_ page: PDFPage) -> CGRect {
+        let s = PDFService.displaySize(page)
+        return CGRect(x: 0, y: 0, width: s.width, height: s.height).applying(PDFService.pageToDisplay(page).inverted())
+    }
+
+    /// One axis. `mine`: the moving rect's coordinates on this axis with their edge index (0 min, 1 mid, 2 max).
+    /// `others`: candidate rects; `page`: the page rect (alignment only). Returns the correction and its guides.
+    private func mkSnapAxis(mine: [(CGFloat, Int)], others: [CGRect], page: CGRect, horizontal: Bool, movingRect r: CGRect) -> (CGFloat, [SnapGuide])? {
+        let tol = mkSnapTol
+        var best: (diff: CGFloat, d: CGFloat, guides: [SnapGuide])? = nil
+        func consider(_ d: CGFloat, _ g: [SnapGuide]) { let ad = abs(d); if ad <= tol, best == nil || ad < best!.diff { best = (ad, d, g) } }
+        func lo(_ o: CGRect) -> CGFloat { horizontal ? o.minX : o.minY }
+        func mid(_ o: CGRect) -> CGFloat { horizontal ? o.midX : o.midY }
+        func hi(_ o: CGRect) -> CGFloat { horizontal ? o.maxX : o.maxY }
+        func plo(_ o: CGRect) -> CGFloat { horizontal ? o.minY : o.minX }   // perpendicular extent
+        func phi(_ o: CGRect) -> CGFloat { horizontal ? o.maxY : o.maxX }
+        func line(_ v: CGFloat, from p0: CGFloat, to p1: CGFloat, _ kind: SnapGuide.Kind) -> SnapGuide {
+            horizontal ? SnapGuide(kind: kind, a: CGPoint(x: v, y: p0), b: CGPoint(x: v, y: p1))
+                       : SnapGuide(kind: kind, a: CGPoint(x: p0, y: v), b: CGPoint(x: p1, y: v))
+        }
+        // alignment and touching against annotations and the page
+        for (o, isPage) in others.map({ ($0, false) }) + [(page, true)] {
+            let theirs: [(CGFloat, Int)] = [(lo(o), 0), (mid(o), 1), (hi(o), 2)]
+            for (mv, mi) in mine {
+                for (ov, oi) in theirs {
+                    let d = ov - mv
+                    guard abs(d) <= tol else { continue }
+                    let touch = !isPage && ((mi == 0 && oi == 2) || (mi == 2 && oi == 0))
+                    let p0 = min(plo(r), plo(o)) - 6, p1 = max(phi(r), phi(o)) + 6
+                    consider(d, [line(ov, from: p0, to: p1, touch ? .touch : .align)])
+                }
+            }
+        }
+        // spacing: neighbours that overlap on the perpendicular axis, in order; match an existing gap
+        let row = others.filter { phi($0) > plo(r) && plo($0) < phi(r) }.sorted { lo($0) < lo($1) }
+        if row.count >= 2, let rl = mine.first(where: { $0.1 == 0 })?.0, let rh = mine.first(where: { $0.1 == 2 })?.0 {
+            let c = horizontal ? r.midY : r.midX
+            func gap(_ x0: CGFloat, _ x1: CGFloat) -> SnapGuide {
+                horizontal ? SnapGuide(kind: .gap, a: CGPoint(x: x0, y: c), b: CGPoint(x: x1, y: c))
+                           : SnapGuide(kind: .gap, a: CGPoint(x: c, y: x0), b: CGPoint(x: c, y: x1))
+            }
+            for i in 0..<(row.count - 1) {
+                let a = row[i], b = row[i + 1]
+                let g = lo(b) - hi(a)
+                guard g > 0.5 else { continue }
+                consider((hi(b) + g) - rl, [gap(hi(a), lo(b)), gap(hi(b), hi(b) + g)])      // after the pair
+                consider((lo(a) - g) - rh, [gap(lo(a) - g, lo(a)), gap(hi(a), lo(b))])      // before the pair
+            }
+        }
+        return best.map { ($0.d, $0.guides) }
+    }
+
+    /// Snaps a rect being moved; returns the correction to add to the drag and the guides to draw.
+    func mkSnapRect(_ r: CGRect, page: PDFPage, excluding: [PDFAnnotation], edges: Set<Int> = [0, 1, 2]) -> (dx: CGFloat, dy: CGFloat, guides: [SnapGuide]) {
+        guard app.settings.snapEnabled else { return (0, 0, []) }
+        let others = mkSnapTargets(on: page, excluding: excluding)
+        let pr = mkPageRect(page)
+        let mx: [(CGFloat, Int)] = [(r.minX, 0), (r.midX, 1), (r.maxX, 2)].filter { edges.contains($0.1) }
+        let my: [(CGFloat, Int)] = [(r.minY, 0), (r.midY, 1), (r.maxY, 2)].filter { edges.contains($0.1) }
+        let sx = mkSnapAxis(mine: mx, others: others, page: pr, horizontal: true, movingRect: r)
+        let sy = mkSnapAxis(mine: my, others: others, page: pr, horizontal: false, movingRect: r)
+        return (sx?.0 ?? 0, sy?.0 ?? 0, (sx?.1 ?? []) + (sy?.1 ?? []))
+    }
+
+    /// Snaps a single point (shape corner being dragged, tap placement) to edges and centres.
+    func mkSnapPoint(_ p: CGPoint, page: PDFPage, excluding: [PDFAnnotation] = []) -> (point: CGPoint, guides: [SnapGuide]) {
+        guard app.settings.snapEnabled else { return (p, []) }
+        let others = mkSnapTargets(on: page, excluding: excluding)
+        let pr = mkPageRect(page)
+        let r = CGRect(x: p.x, y: p.y, width: 0, height: 0)
+        let sx = mkSnapAxis(mine: [(p.x, 1)], others: others, page: pr, horizontal: true, movingRect: r)
+        let sy = mkSnapAxis(mine: [(p.y, 1)], others: others, page: pr, horizontal: false, movingRect: r)
+        return (CGPoint(x: p.x + (sx?.0 ?? 0), y: p.y + (sy?.0 ?? 0)), (sx?.1 ?? []) + (sy?.1 ?? []))
+    }
+
+    private func mkClearSnap() { if !mk.snapGuides.isEmpty { mk.snapGuides = [] } }
 
     /// Outside the Forms tab a form field is operated, not edited: buttons flip, radios pick within their group,
     /// everything else opens the in-place field editor.

@@ -81,6 +81,14 @@ struct GeneralSettings: View {
                     .font(fnt(12)).foregroundStyle(theme.ink3).lineSpacing(2)
             }
             VStack(alignment: .leading, spacing: 6) {
+                SectionLabel(text: "Snapping")
+                Toggle(isOn: Binding(get: { app.settings.snapEnabled }, set: { app.settings.snapEnabled = $0 })) {
+                    Text("Snap annotations while placing and moving").font(fnt(14, .medium)).foregroundStyle(theme.ink1)
+                }.tint(theme.accent)
+                Text("Shapes, text, stamps, notes and form fields snap to each other's edges and centres, touch each other, and match the spacing of their neighbours. Guides show what they snapped to. Pens never snap. The tool bar has a quick toggle.")
+                    .font(fnt(12)).foregroundStyle(theme.ink3).lineSpacing(2)
+            }
+            VStack(alignment: .leading, spacing: 6) {
                 SectionLabel(text: "Markup sheets")
                 SegmentControl(options: [SegmentOption(value: false, label: "White paper"), SegmentOption(value: true, label: "Blueprint blue")],
                                selection: Binding(get: { app.settings.blueprint }, set: { app.settings.blueprint = $0 }), fontSize: 12.5, vPad: 7, fill: true)

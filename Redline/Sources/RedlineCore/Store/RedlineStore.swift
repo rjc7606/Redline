@@ -38,6 +38,12 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var customStamps: [StampDef]?
     /// Every stamp available in the gallery.
     public var allStamps: [StampDef] { ToolCatalog.builtInStamps + (customStamps ?? []) }
+    /// Snap annotations to each other and the page while placing / moving (nil = on).
+    public var snapping: Bool?
+    public var snapEnabled: Bool {
+        get { snapping ?? true }
+        set { snapping = newValue }
+    }
     public var fingerDrawingMode: FingerDrawing {
         get { fingerDrawing ?? .auto }
         set { fingerDrawing = newValue }

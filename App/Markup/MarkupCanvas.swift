@@ -469,6 +469,44 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             cg.restoreGState()
         }
 
+        // Snap guides: alignment (dashed), touching (solid), equal spacing (brackets)
+        if !mk.snapGuides.isEmpty, let page = mk.live?.page ?? mk.selected.first?.page ?? v.currentPage {
+            cg.saveGState()
+            let magenta = UIColor(red: 0.85, green: 0.2, blue: 0.6, alpha: 1)
+            for g in mk.snapGuides {
+                let a = overlayPoint(g.a, on: page), b = overlayPoint(g.b, on: page)
+                switch g.kind {
+                case .align:
+                    cg.setStrokeColor(accent.cgColor); cg.setLineWidth(1 * u); cg.setLineDash(phase: 0, lengths: [4 * u, 3 * u])
+                    cg.move(to: a); cg.addLine(to: b); cg.strokePath()
+                case .touch:
+                    cg.setStrokeColor(accent.cgColor); cg.setLineWidth(1.5 * u); cg.setLineDash(phase: 0, lengths: [])
+                    cg.move(to: a); cg.addLine(to: b); cg.strokePath()
+                case .gap:
+                    // a bracket with end ticks and a centre "=" marker
+                    cg.setStrokeColor(magenta.cgColor); cg.setLineWidth(1 * u); cg.setLineDash(phase: 0, lengths: [])
+                    let horizontal = abs(b.y - a.y) < abs(b.x - a.x)
+                    let t = 5 * u
+                    cg.move(to: a); cg.addLine(to: b)
+                    if horizontal {
+                        cg.move(to: CGPoint(x: a.x, y: a.y - t)); cg.addLine(to: CGPoint(x: a.x, y: a.y + t))
+                        cg.move(to: CGPoint(x: b.x, y: b.y - t)); cg.addLine(to: CGPoint(x: b.x, y: b.y + t))
+                        let m = CGPoint(x: (a.x + b.x) / 2, y: a.y)
+                        cg.move(to: CGPoint(x: m.x - 3 * u, y: m.y - 2 * u)); cg.addLine(to: CGPoint(x: m.x + 3 * u, y: m.y - 2 * u))
+                        cg.move(to: CGPoint(x: m.x - 3 * u, y: m.y + 2 * u)); cg.addLine(to: CGPoint(x: m.x + 3 * u, y: m.y + 2 * u))
+                    } else {
+                        cg.move(to: CGPoint(x: a.x - t, y: a.y)); cg.addLine(to: CGPoint(x: a.x + t, y: a.y))
+                        cg.move(to: CGPoint(x: b.x - t, y: b.y)); cg.addLine(to: CGPoint(x: b.x + t, y: b.y))
+                        let m = CGPoint(x: a.x, y: (a.y + b.y) / 2)
+                        cg.move(to: CGPoint(x: m.x - 2 * u, y: m.y - 3 * u)); cg.addLine(to: CGPoint(x: m.x - 2 * u, y: m.y + 3 * u))
+                        cg.move(to: CGPoint(x: m.x + 2 * u, y: m.y - 3 * u)); cg.addLine(to: CGPoint(x: m.x + 2 * u, y: m.y + 3 * u))
+                    }
+                    cg.strokePath()
+                }
+            }
+            cg.restoreGState()
+        }
+
         // Eraser outline while erasing
         if let ep = mk.eraserPoint, let page = mk.eraserPage {
             let r = CGFloat(max(2, editor.style(for: .eraser).width / 2)) * z

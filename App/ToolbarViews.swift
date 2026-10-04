@@ -298,6 +298,10 @@ struct MarkupToolStrip: View {
             }
             Spacer(minLength: 0)
             Rectangle().fill(theme.line2).frame(width: 1, height: 30).padding(.horizontal, 8)
+            BarButton(symbol: "square.on.square.dashed", label: "Snap to annotations", active: editor.app.settings.snapEnabled) {
+                editor.app.settings.snapEnabled.toggle()
+                editor.app.flash(editor.app.settings.snapEnabled ? "Snapping on" : "Snapping off")
+            }
             BarButton(symbol: "ruler", label: "Ruler", active: editor.ruler.on) { editor.toggleRuler() }
                 .padding(.trailing, 10)
         }
