@@ -12,6 +12,10 @@ struct RedlineApp: App {
                 .environment(model)
                 .preferredColorScheme(model.preferredColorScheme)
                 .onOpenURL { url in model.openPDF(from: url) }
+                // A document dropped beside the app (Split View) or "Open in New Window" arrives as a user activity.
+                .onContinueUserActivity(AppModel.openActivity) { act in
+                    if let id = act.userInfo?["doc"] as? String { model.openDocument(id) }
+                }
                 // Leaving the foreground (switching apps, lock, termination) writes everything pending.
                 .onChange(of: scenePhase) { _, phase in if phase != .active { model.flushSaves() } else { model.refreshOpenPDFs() } }
         }

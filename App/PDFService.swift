@@ -136,18 +136,24 @@ final class PDFService {
     func isExternal(_ file: String) -> Bool { file.hasPrefix("ext:") }
     func externalURL(_ file: String) -> URL? { external[file] }
 
-    /// Imported PDFs live in Documents/PDFs so they show up in the Files app.
-    static var directory: URL {
-        let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("PDFs", isDirectory: true)
-        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-        return d
+    /// Library PDFs: Documents/PDFs (visible in the Files app), or the PDFs folder of the chosen library folder.
+    static var directory: URL { LibraryHub.shared.pdfDirectory }
+
+    /// Drops every cached document and image (the library moved); in-place registrations are kept.
+    func resetCaches() {
+        docs = [:]; images = [:]; thumbs = [:]; imageOrder = []; loadedDates = [:]; lastChecks = [:]
+        revision += 1
     }
 
     func url(for file: String) -> URL { external[file] ?? PDFService.directory.appendingPathComponent(file) }
 
     func document(_ file: String) -> PDFDocument? {
         if let d = docs[file] { return d }
-        guard let d = PDFDocument(url: url(for: file)) else { return nil }
+        // Coordinated read: a file in iCloud Drive that isn't downloaded yet is fetched first.
+        var loaded: PDFDocument? = nil
+        var err: NSError? = nil
+        NSFileCoordinator().coordinate(readingItemAt: url(for: file), options: [], error: &err) { u in loaded = PDFDocument(url: u) }
+        guard let d = loaded else { return nil }
         docs[file] = d
         loadedDates[file] = modificationDate(file) ?? Date()
         return d

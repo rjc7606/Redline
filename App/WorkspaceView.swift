@@ -209,6 +209,7 @@ struct DocTabsRow: View {
         .onTapGesture { if !on { app.openDocument(d.id) } }
         .contextMenu {
             Button("Close", systemImage: "xmark") { app.closeDocument(d.id) }
+            if app.supportsMultipleWindows { Button("Move to New Window", systemImage: "rectangle.split.2x1") { app.moveToNewWindow(d.id) } }
             if app.openDocs.count > 1 {
                 Button("Close others") { for other in app.openDocs where other != d.id { app.closeDocument(other) } }
             }

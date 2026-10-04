@@ -162,6 +162,13 @@ swift test
 - Comments sidebar: sort (page / newest / author) and show (all / open / resolved) menu, "next unresolved" (⇧⌘U).
   Export has a comment summary PDF and a CSV.
 - Flatten… lets you burn in everything, only the selection, or chosen authors; the rest stay editable.
+- Multiple windows: "Open in New Window" on a document's menu, "Move to New Window" on a tab, or drag a
+  document tile to the edge of the screen for Split View. Windows share the library, settings and the clipboard;
+  a document can be open in one window at a time.
+- Library location (Settings › General): keep the library in a folder you choose. Pick a folder in iCloud Drive
+  and choose the same folder on another iPad to sync notebooks, drawings and markups (no iCloud entitlement
+  needed, so it works for sideloaded builds). The library file is reloaded when another device changes it;
+  unsaved local edits win. PDFs opened in place stay where they are.
 - Crop (Edit tab): drag the area to keep; the page's crop box is set, which every reader honours, and Organize
   Pages has a reset button for cropped pages. Redline displays the crop box of every PDF (as other readers do).
 - Redact: black boxes are marks until you press Apply redactions in the tool bar. Applying rebuilds each affected

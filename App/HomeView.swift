@@ -84,8 +84,10 @@ struct DocTile<Extra: View>: View {
         .frame(width: tileWidth, alignment: .leading)
         .contentShape(Rectangle())
         .onTapGesture { app.openDocument(doc.id) }
+        .onDrag { AppModel.dragItem(for: doc.id) }
         .contextMenu {
             Button("Open", systemImage: "arrow.up.right.square") { app.openDocument(doc.id) }
+            if app.supportsMultipleWindows { Button("Open in New Window", systemImage: "rectangle.split.2x1") { app.openInNewWindow(doc.id) } }
             extra()
             Button("Delete", systemImage: "trash", role: .destructive) { app.pendingDelete = doc.id }
         }

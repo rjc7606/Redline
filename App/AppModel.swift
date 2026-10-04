@@ -35,17 +35,25 @@ struct NewDocumentDraft {
     }
 }
 
-/// App-wide state: the store, navigation, theme, persistence and toasts.
+/// One window's state: navigation, open documents, theme and toasts. The library itself (store, PDFs, clipboard,
+/// saving) is shared between windows through `LibraryHub`.
 @MainActor
 @Observable
 final class AppModel {
-    var store: RedlineStore
+    let hub = LibraryHub.shared
+    var store: RedlineStore {
+        get { hub.store }
+        set { hub.store = newValue }
+    }
     var screen: Screen = .home
     var editor: WorkspaceModel? = nil
     /// Documents open in the workspace, in tab order; each keeps its editor (tool, page, zoom, undo) while open.
     var openDocs: [ID] = []
-    /// Copied annotations (detached clones) — paste into any open PDF.
-    var clipboard: [PDFAnnotation] = []
+    /// Copied annotations (detached clones) — paste into any open PDF, in any window.
+    var clipboard: [PDFAnnotation] {
+        get { hub.clipboard }
+        set { hub.clipboard = newValue }
+    }
     @ObservationIgnored private var editors: [ID: WorkspaceModel] = [:]
 
     var settingsOpen = false
@@ -66,13 +74,53 @@ final class AppModel {
 
     var toast: String? = nil
     private var toastTask: Task<Void, Never>? = nil
-    private var saveTask: Task<Void, Never>? = nil
 
-    let pdf = PDFService()
+    var pdf: PDFService { hub.pdf }
 
     init() {
-        store = RedlineStore(data: AppModel.load() ?? Seed.data())
-        resolveExternalPDFs()
+        hub.register(self)
+        if !hub.resolvedExternal { hub.resolvedExternal = true; resolveExternalPDFs() }
+    }
+
+    // MARK: windows
+
+    static let openActivity = "com.example.redline.open"
+
+    /// A user activity that opens `id`: handed to the system to make a new window (or dropped beside the app for Split View).
+    static func openActivity(for id: ID) -> NSUserActivity {
+        let act = NSUserActivity(activityType: openActivity)
+        act.title = "Open in Redline"
+        act.userInfo = ["doc": id]
+        act.targetContentIdentifier = id
+        return act
+    }
+    static func dragItem(for id: ID) -> NSItemProvider {
+        let p = NSItemProvider(object: id as NSString)
+        p.registerObject(openActivity(for: id), visibility: .all)
+        return p
+    }
+    var supportsMultipleWindows: Bool { UIApplication.shared.supportsMultipleScenes }
+    func openInNewWindow(_ id: ID) {
+        guard supportsMultipleWindows else { openDocument(id); return }
+        if let e = editors[id], e.isPDF { e.mkSaveNow() }
+        UIApplication.shared.requestSceneSessionActivation(nil, userActivity: AppModel.openActivity(for: id), options: nil, errorHandler: nil)
+    }
+    /// Closes the tab here and opens the document in a new window.
+    func moveToNewWindow(_ id: ID) {
+        guard supportsMultipleWindows else { return }
+        closeDocument(id)
+        UIApplication.shared.requestSceneSessionActivation(nil, userActivity: AppModel.openActivity(for: id), options: nil, errorHandler: nil)
+    }
+    /// After the library file was replaced from elsewhere: drop tabs for documents that no longer exist.
+    func reconcileAfterReload() {
+        for id in openDocs where store.document(id) == nil { closeDocument(id) }
+    }
+
+    /// Moves the library to a folder (nil = app storage). Needs every document closed, in every window.
+    func changeLibraryFolder(_ url: URL?) {
+        guard !hub.anyDocumentOpen else { flash("Close every open document first (in every window)"); return }
+        if let err = hub.useFolder(url) { flash(err); return }
+        flash(url.map { "Library now in \($0.lastPathComponent)" } ?? "Library back in app storage")
     }
 
     /// Re-attaches PDFs that were opened in place (security-scoped bookmarks) so they load, render and save where they live.
@@ -141,11 +189,12 @@ final class AppModel {
     /// Writes every pending edit now: open PDFs (their debounced save) and the JSON store.
     func flushSaves() {
         for e in editors.values where e.isPDF { e.mkSaveNow() }
-        saveNow()
+        hub.saveNow()
     }
 
     func openDocument(_ id: ID) {
         guard store.document(id) != nil else { return }
+        if hub.isOpenElsewhere(id, than: self) { flash("Already open in another window"); return }
         if let cur = editor, cur.docID != id, cur.isPDF { cur.mkSaveNow() }
         store.noteOpened(id)
         if !openDocs.contains(id) { openDocs.append(id) }
@@ -265,12 +314,6 @@ final class AppModel {
 
     // MARK: persistence
 
-    static var directory: URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Redline", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        return base
-    }
-    static var dataFile: URL { directory.appendingPathComponent("redline.json") }
     /// Exports the user saves "to Files" land here (Documents/Exports, visible in the Files app).
     static var exportsDirectory: URL {
         let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Exports", isDirectory: true)
@@ -278,28 +321,8 @@ final class AppModel {
         return d
     }
 
-    static func load() -> RedlineData? {
-        guard let bytes = try? Data(contentsOf: dataFile) else { return nil }
-        return try? RedlineData.decode(bytes)
-    }
-
-    func scheduleSave() {
-        saveTask?.cancel()
-        saveTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            self?.saveNow()
-        }
-    }
-
-    func saveNow() {
-        do {
-            let bytes = try store.data.encode()
-            try bytes.write(to: AppModel.dataFile, options: .atomic)
-        } catch {
-            print("Redline: save failed — \(error)")
-        }
-    }
+    func scheduleSave() { hub.scheduleSave() }
+    func saveNow() { hub.saveNow() }
 
     // MARK: PDF import & rendering
 

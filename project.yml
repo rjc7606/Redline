@@ -32,7 +32,9 @@ targets:
           - SourceSans3-Semibold.ttf
           - SourceSans3-Bold.ttf
         UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: false
+          UIApplicationSupportsMultipleScenes: true
+        NSUserActivityTypes:
+          - com.example.redline.open
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown

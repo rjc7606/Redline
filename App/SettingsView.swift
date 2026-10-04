@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import RedlineCore
 
 struct SettingsView: View {
@@ -60,10 +61,27 @@ struct SettingsView: View {
 struct GeneralSettings: View {
     @Environment(\.theme) private var theme
     @Environment(AppModel.self) private var app
+    @State private var folderPickerOn = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             Text("General").font(titleFnt(20)).foregroundStyle(theme.ink1)
+            VStack(alignment: .leading, spacing: 6) {
+                SectionLabel(text: "Library location")
+                HStack(spacing: 8) {
+                    Image(systemName: app.hub.customFolder == nil ? "ipad" : "folder.fill").font(fnt(14)).foregroundStyle(theme.ink3)
+                    Text(app.hub.customFolder.map { "Folder: " + $0.lastPathComponent } ?? "On this iPad (app storage)").font(fnt(14, .medium)).foregroundStyle(theme.ink1)
+                }
+                HStack(spacing: 8) {
+                    SecondaryButton(label: "Choose folder…", symbol: "folder", height: 32) { folderPickerOn = true }
+                    if app.hub.customFolder != nil { SecondaryButton(label: "Use app storage", symbol: "ipad", height: 32) { app.changeLibraryFolder(nil) } }
+                }
+                Text("Keep the library (notebooks, drawings, markups and their PDFs) in a folder you choose. Pick a folder in iCloud Drive and choose the same folder on your other iPad to keep them in sync. Close every document in every window before switching.")
+                    .font(fnt(12)).foregroundStyle(theme.ink3).lineSpacing(2)
+            }
+            .fileImporter(isPresented: $folderPickerOn, allowedContentTypes: [UTType.folder]) { result in
+                if case .success(let url) = result { app.changeLibraryFolder(url) }
+            }
             VStack(alignment: .leading, spacing: 6) {
                 SectionLabel(text: "Your name on comments")
                 FieldText(placeholder: "Name", text: Binding(get: { app.settings.author }, set: { app.settings.author = $0 }))
