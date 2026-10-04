@@ -100,6 +100,8 @@ swift test
 - Several documents can be open at once: a tabs row under the tool bar lists them (tap to switch, × to close).
   They stay open across Home until closed, and opening from anywhere adds a tab. Each open document keeps its
   tool, page, zoom and undo history while open.
+- Outside the Forms tab, form fields are used, not selected: tap to flip a checkbox or toggle, pick a radio (its
+  group clears), fill a text / date / signature field in place, or choose from a dropdown. The Forms tab edits them.
 - Form fields have their own look (tinted rounded boxes with placeholder names, real check / radio / switch
   glyphs, a signature line); text-type fields also carry that look as an appearance stream, and the same tint and
   border go into the field's /MK colours for readers that draw fields themselves.

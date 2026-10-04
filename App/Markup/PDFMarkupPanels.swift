@@ -313,6 +313,60 @@ struct PDFTextEditor: View {
     }
 }
 
+// MARK: - In-place form filling (outside the Forms tab)
+
+/// Text, date and signature fields get a field over the widget; dropdowns and lists get their choices under it.
+struct PDFFieldEditor: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: WorkspaceModel
+    var widget: PDFAnnotation
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let mk = editor.mk
+        let _ = mk.viewportTick
+        let _ = mk.renderTick
+        if let v = mk.pdfView, let page = widget.page {
+            let r = v.convert(widget.bounds, from: page)
+            if widget.widgetFieldType == .choice {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(widget.choices ?? [], id: \.self) { c in
+                        Button { editor.mkSetWidgetValue(widget, c); mk.fieldEdit = nil } label: {
+                            HStack {
+                                Text(c).font(fnt(14)).foregroundStyle(theme.ink1)
+                                Spacer()
+                                if (widget.widgetStringValue ?? "") == c { Image(systemName: "checkmark").font(fnt(12, .bold)).foregroundStyle(theme.accent) }
+                            }
+                            .padding(.horizontal, 12).frame(height: 36).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                    }
+                    if (widget.choices ?? []).isEmpty { Text("No options").font(fnt(13)).foregroundStyle(theme.ink4).padding(12) }
+                }
+                .frame(width: max(180, r.width))
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.popSolid)
+                    .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).stroke(theme.line, lineWidth: 1))
+                    .popShadow(theme))
+                .offset(x: max(8, min(r.minX, v.bounds.width - max(180, r.width) - 8)), y: r.maxY + 4)
+                .popIn()
+            } else {
+                let area = widget.redlineTool == .farea
+                TextField(widget.fieldName?.replacingOccurrences(of: "_", with: " ") ?? "", text: Binding(get: { widget.widgetStringValue ?? "" }, set: { editor.mkSetWidgetValue(widget, $0) }), axis: area ? .vertical : .horizontal)
+                    .font(fnt(max(11, min(14, r.height * (area ? 0.22 : 0.5)))))
+                    .foregroundStyle(theme.ink1)
+                    .textFieldStyle(.plain)
+                    .focused($focused)
+                    .padding(.horizontal, 6).padding(.vertical, area ? 4 : 0)
+                    .frame(width: max(60, r.width), height: max(24, r.height), alignment: area ? .topLeading : .leading)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(theme.card))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.accent, lineWidth: 1.5))
+                    .offset(x: r.minX, y: r.minY)
+                    .onSubmit { mk.fieldEdit = nil }
+                    .onAppear { focused = true }
+            }
+        }
+    }
+}
+
 // MARK: - Organize pages (PDF) — 160 pt thumbnails, action pill below the selected page
 
 struct PDFOrganizePages: View {

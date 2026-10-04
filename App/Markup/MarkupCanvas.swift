@@ -16,6 +16,7 @@ struct MarkupCanvas: View {
             GrainBackground(color: theme.canvas)
             PDFStackRepresentable(editor: editor, tick: mk.renderTick, viewportTick: mk.viewportTick, canvasColor: UIColor(hex: theme.tokens.canvas))
             if let te = mk.textEdit { PDFTextEditor(editor: editor, edit: te) }
+            if let fe = mk.fieldEdit { PDFFieldEditor(editor: editor, widget: fe) }
             if mk.annotationPopup, mk.textEdit == nil { PDFAnnotationPopup(editor: editor) }
         }
         .clipped()

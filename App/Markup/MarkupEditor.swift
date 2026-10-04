@@ -88,6 +88,8 @@ final class MarkupState {
     var keyboardOverlap: CGFloat = 0
     /// Outline entries the user collapsed in the sidebar.
     var collapsedOutline: Set<String> = []
+    /// Form field being filled in place (text / date / signature / dropdown), outside the Forms tab.
+    var fieldEdit: PDFAnnotation? = nil
     /// Polyline being placed point by point.
     var polyPoints: [CGPoint] = []
     var polyPage: PDFPage? = nil
@@ -618,6 +620,14 @@ extension WorkspaceModel {
             mkDrag = .pan
             return
         }
+        if mk.fieldEdit != nil {
+            // Tapping outside a field being filled only closes it.
+            mk.fieldEdit = nil
+            mk.swallowTap = true
+            mkDrag = .pan
+            mk.renderTick += 1
+            return
+        }
         if mk.annotationPopup {
             // Tapping outside the comment popup only closes it (no sticky note, stamp or text box gets placed).
             mkClosePopup()
@@ -655,6 +665,7 @@ extension WorkspaceModel {
         switch info.kind {
         case .select, .lasso:
             if let a = mkAnnotation(at: p, page: page)?.annotation {
+                if a.isWidget, !onFormsTab { mkDrag = .pan; return }   // filled in on the tap, below
                 if mk.selected.contains(where: { $0 === a }) {
                     let movable = mkMovableSelection
                     if movable.isEmpty { mkDrag = nil; return }
@@ -879,6 +890,7 @@ extension WorkspaceModel {
                 if mk.swallowTap { mk.swallowTap = false; return }
                 // A clean tap on an annotation selects it, whatever tool is active.
                 if tool.kind == .fill, mkFillAt(p, page: page) { return }   // a bucket tap is always on top of something
+                if !onFormsTab, let w = mkAnnotation(at: p, page: page)?.annotation, w.isWidget { mkUseWidget(w); return }
                 if mkSelectHit(at: p, page: page, splitStrokes: false) { return }
                 if tool.info.isTap || tool.kind == .fill { mkTap(at: p, page: page) }
                 else if tool == .none { mkClearSelection() }
@@ -1064,6 +1076,35 @@ extension WorkspaceModel {
         }
         mkMarkDirty()
         app.flash("Fill removed")
+    }
+
+    /// Outside the Forms tab a form field is operated, not edited: buttons flip, radios pick within their group,
+    /// everything else opens the in-place field editor.
+    func mkUseWidget(_ w: PDFAnnotation) {
+        switch w.widgetFieldType {
+        case .button:
+            if w.widgetControlType == .radioButtonControl {
+                if let page = w.page, let name = w.fieldName {
+                    for o in page.annotations where o.isWidget && o.fieldName == name && o !== w { mkSetWidgetValue(o, "Off") }
+                }
+                mkSetWidgetValue(w, "Yes")
+            } else {
+                let on = (w.widgetStringValue ?? "Off") != "Off"
+                mkSetWidgetValue(w, on ? "Off" : "Yes")
+            }
+        default:
+            mkClearSelection()
+            mk.fieldEdit = w
+            mk.renderTick += 1
+        }
+    }
+
+    func mkSetWidgetValue(_ w: PDFAnnotation, _ value: String) {
+        guard (w.widgetStringValue ?? "") != value else { return }
+        w.widgetStringValue = value
+        w.modificationDate = Date()
+        w.dropAppearance()
+        mkMarkDirty()
     }
 
     /// Bucket: rectangles / ellipses take their own interior colour; closed outlines (clouds, closed polylines, pen
