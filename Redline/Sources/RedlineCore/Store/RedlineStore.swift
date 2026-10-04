@@ -36,6 +36,8 @@ public struct AppSettings: Codable, Sendable, Equatable {
     public var folders: [String]?
     /// Stamps the user created (static or dynamic).
     public var customStamps: [StampDef]?
+    /// Saved signatures (first = default).
+    public var signatures: [SavedSignature]?
     /// Every stamp available in the gallery.
     public var allStamps: [StampDef] { ToolCatalog.builtInStamps + (customStamps ?? []) }
     /// Snap annotations to each other and the page while placing / moving (nil = on).

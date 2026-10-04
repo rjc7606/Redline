@@ -106,6 +106,11 @@ final class MarkupState {
     var polyTool: Tool = .polyline
     /// A calibration line was drawn: its length in points, waiting for the real length.
     var calibratePending: CGFloat? = nil
+    /// Insert image: the picker, and the image waiting to be placed.
+    var imagePickerOn = false
+    var pendingImage: UIImage? = nil
+    /// Signature pad sheet.
+    var signaturePadOn = false
     /// Text search.
     var searchOpen = false
     var searchQuery = ""
@@ -370,6 +375,58 @@ extension WorkspaceModel {
         if let page = c.annotation.page { mkSelect(c.annotation, on: page) }
     }
 
+    // MARK: copy · paste · duplicate
+
+    /// Copies the selection (with group members) to the app clipboard.
+    func mkCopySelection() {
+        guard let page = mk.selected.first?.page, !mk.selected.isEmpty else { return }
+        var all = mk.selected
+        for a in mk.selected { for c in mkChildren(of: a, on: page) where !c.isReply && !c.isStateAnnotation && !all.contains(where: { $0 === c }) { all.append(c) } }
+        let clones = AnnotationFactory.cloneGroup(all)
+        guard !clones.isEmpty else { return }
+        app.clipboard = clones
+        app.flash("Copied " + Formatting.plural(mk.selected.filter(\.isPrimary).count, "annotation"))
+    }
+
+    /// Pastes the clipboard onto the current page, centred in view (or at `point`), and selects it.
+    func mkPaste(at point: CGPoint? = nil) {
+        guard !app.clipboard.isEmpty, let page = mk.page(pageIndex) else { return }
+        let clones = AnnotationFactory.cloneGroup(app.clipboard)   // fresh copies so repeated pastes stay independent
+        guard let first = clones.first else { return }
+        var u = first.bounds
+        for c in clones.dropFirst() { u = u.union(c.bounds) }
+        var target = point
+        if target == nil, let v = mk.pdfView {
+            let centre = v.convert(CGPoint(x: v.bounds.width / 2, y: v.bounds.height / 2), to: page)
+            let pr = PDFService.displaySize(page)
+            target = CGPoint(x: min(max(u.width / 2, centre.x), pr.width - u.width / 2), y: min(max(u.height / 2, centre.y), pr.height - u.height / 2))
+        }
+        let dx = (target?.x ?? u.midX) - u.midX, dy = (target?.y ?? u.midY) - u.midY
+        for c in clones { mkOffset(c, dx: dx, dy: dy) }
+        mkPerform(.add(page: page, annots: clones))
+        mk.selected = clones
+        mk.renderTick += 1
+    }
+
+    /// Duplicates the selection a little down and to the right.
+    func mkDuplicateSelection() {
+        guard let page = mk.selected.first?.page, !mk.selected.isEmpty else { return }
+        var all = mk.selected
+        for a in mk.selected { for c in mkChildren(of: a, on: page) where !c.isReply && !c.isStateAnnotation && !all.contains(where: { $0 === c }) { all.append(c) } }
+        let clones = AnnotationFactory.cloneGroup(all)
+        guard !clones.isEmpty else { return }
+        for c in clones { mkOffset(c, dx: 16, dy: -16) }
+        mkPerform(.add(page: page, annots: clones))
+        mk.selected = clones
+        mk.renderTick += 1
+    }
+
+    private func mkOffset(_ a: PDFAnnotation, dx: CGFloat, dy: CGFloat) {
+        a.bounds = a.bounds.offsetBy(dx: dx, dy: dy)
+        if a.subtype == "Polygon" { a.polygonVertices = a.polygonVertices.map { CGPoint(x: $0.x + dx, y: $0.y + dy) } }
+        if let q = a.quadrilateralPoints as? [NSValue], !q.isEmpty { /* quads are relative to bounds: nothing to do */ _ = q }
+    }
+
     func mkDeleteSelection() {
         guard let page = mk.selected.first?.page, !mk.selected.isEmpty else { return }
         var all = mk.selected
@@ -582,6 +639,34 @@ extension WorkspaceModel {
         pdf.insert(page, at: i + 1)
         pageIndex = i + 1
         mkMarkDirty(); app.flash("Blank page inserted")
+    }
+
+    /// Appends every page of another PDF.
+    func mkAppendPDF(from url: URL) {
+        guard let pdf = mk.pdf else { return }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let other = PDFDocument(url: url), other.pageCount > 0 else { app.flash("Couldn't read that PDF"); return }
+        for i in 0..<other.pageCount { if let p = other.page(at: i) { pdf.insert(p, at: pdf.pageCount) } }
+        mk.undoStack.removeAll(); mk.redoStack.removeAll()
+        mkMarkDirty()
+        app.flash("Appended " + Formatting.plural(other.pageCount, "page"))
+    }
+
+    /// Writes one page (with its annotations) as a new PDF in the library and opens it.
+    func mkExtractPage(_ i: Int) {
+        guard let page = mk.page(i), let copy = page.copy() as? PDFPage else { return }
+        let out = PDFDocument()
+        out.insert(copy, at: 0)
+        let base = doc.name.replacingOccurrences(of: ".pdf", with: "")
+        var file = "\(base) – page \(i + 1).pdf"
+        var n = 2
+        while FileManager.default.fileExists(atPath: PDFService.directory.appendingPathComponent(file).path) { file = "\(base) – page \(i + 1) \(n).pdf"; n += 1 }
+        guard out.write(to: PDFService.directory.appendingPathComponent(file)) else { app.flash("Couldn't extract the page"); return }
+        let d = app.store.createDocument(type: .markup, name: file.replacingOccurrences(of: ".pdf", with: ""), pageCount: 1, pdfFile: file)
+        app.store.patch(d.id) { $0.sheetSize = PDFService.canvasSize(for: page); $0.folder = doc.folderPath }
+        app.scheduleSave()
+        app.flash("Extracted to the library: \(file)")
     }
 
     // MARK: - Export
@@ -877,7 +962,7 @@ extension WorkspaceModel {
                     let b = snap.bounds
                     a.bounds = CGRect(x: center.x + (b.minX - center.x) * f, y: center.y + (b.minY - center.y) * f, width: b.width * f, height: b.height * f)
                     if a.subtype == "FreeText", let font = snap.font { a.font = font.withSize(max(4, font.pointSize * f)) }
-                    a.dropAppearance()
+                    if a.subtype != "Stamp" { a.dropAppearance() }   // an image's stream just scales with its rect
                 }
             }
             mkMarkDirty()
@@ -1110,6 +1195,18 @@ extension WorkspaceModel {
                 mkPerform(.add(page: page, annots: [a]))
                 mkSelect(a, on: page)
                 mk.focusComment = true
+            } else if tool == .image {
+                guard let img = mk.pendingImage else { mk.imagePickerOn = true; return }
+                let pw = PDFService.displaySize(page).width
+                let a = AnnotationFactory.image(img, at: p, width: min(240, pw * 0.4), author: author)
+                mkPerform(.add(page: page, annots: [a]))
+                mkSelect(a, on: page)
+                mk.pendingImage = nil
+            } else if tool == .signature {
+                guard let sig = app.settings.signatures?.first else { mk.signaturePadOn = true; return }
+                let a = AnnotationFactory.signature(sig, at: p, width: 180, style: st, author: author)
+                mkPerform(.add(page: page, annots: [a]))
+                mkSelect(a, on: page)
             } else if tool == .check || tool == .xmark {
                 let s: CGFloat = 40
                 let paths: [[CGPoint]] = tool == .check
@@ -1671,7 +1768,13 @@ extension WorkspaceModel {
 enum MarkupGeometry {
     static func pathLength(_ pts: [CGPoint]) -> CGFloat {
         guard pts.count > 1 else { return 0 }
-        return (1..<pts.count).reduce(0) { $0 + hypot(pts[$1].x - pts[$1 - 1].x, pts[$1].y - pts[$1 - 1].y) }
+        var total: CGFloat = 0
+        for i in 1..<pts.count {
+            let dx: CGFloat = pts[i].x - pts[i - 1].x
+            let dy: CGFloat = pts[i].y - pts[i - 1].y
+            total += hypot(dx, dy)
+        }
+        return total
     }
     /// Shoelace area of a closed polygon.
     static func polygonArea(_ pts: [CGPoint]) -> CGFloat {

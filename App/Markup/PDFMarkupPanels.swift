@@ -380,6 +380,7 @@ struct PDFOrganizePages: View {
     /// Slot rectangles captured when a drag starts (reading order). The tiles slide during the drag, so the live
     /// frames can't be used for the target — that is what made the preview jump and snap back.
     @State private var slots: [CGRect] = []
+    @State private var appending = false
 
     var body: some View {
         let tick = editor.mk.renderTick
@@ -398,9 +399,13 @@ struct PDFOrganizePages: View {
             HStack {
                 Text("Organize Pages").font(titleFnt(21)).foregroundStyle(theme.ink1)
                 Spacer()
+                SecondaryButton(label: "Append PDF…", symbol: "doc.badge.plus", height: 32) { appending = true }
                 PrimaryButton(label: "Done", height: 32) { editor.organizeOpen = false }
             }
             .padding(.horizontal, 24).padding(.top, 16).padding(.bottom, 12)
+            .fileImporter(isPresented: $appending, allowedContentTypes: [UTType.pdf]) { result in
+                if case .success(let url) = result { editor.mkAppendPDF(from: url) }
+            }
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160, maximum: 160), spacing: 24, alignment: .top)], alignment: .leading, spacing: 24) {
                     ForEach(order, id: \.self) { i in
@@ -474,7 +479,7 @@ struct PDFOrganizePages: View {
                 )
             Text("Page \(i + 1)").font(fnt(12, .semibold)).foregroundStyle(theme.ink3)
             if i == sel && dragging == nil {
-                OrganizeActionPill(rotate: { editor.mkRotatePage(i) }, duplicate: { editor.mkDuplicatePage(i) }, delete: { editor.mkDeletePage(i); selected = nil })
+                OrganizeActionPill(rotate: { editor.mkRotatePage(i) }, duplicate: { editor.mkDuplicatePage(i) }, extract: { editor.mkExtractPage(i) }, delete: { editor.mkDeletePage(i); selected = nil })
             }
         }
     }
@@ -497,11 +502,13 @@ struct OrganizeActionPill: View {
     @Environment(\.theme) private var theme
     var rotate: () -> Void
     var duplicate: () -> Void
+    var extract: (() -> Void)? = nil
     var delete: () -> Void
     var body: some View {
         HStack(spacing: 4) {
             btn("rotate.right", tint: theme.ink2, action: rotate)
             btn("doc.on.doc", tint: theme.ink2, action: duplicate)
+            if let extract { btn("square.and.arrow.up", tint: theme.ink2, action: extract) }
             btn("trash", tint: theme.danger, action: delete)
         }
         .padding(.horizontal, 4).frame(height: 36)

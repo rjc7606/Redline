@@ -324,6 +324,8 @@ final class WorkspaceModel {
             styleExpanded = false
             return
         }
+        if isPDF, t == .image { mk.imagePickerOn = true }
+        if isPDF, t == .signature, (app.settings.signatures ?? []).isEmpty { mk.signaturePadOn = true }
         let keepSession = t.isPen && (tool.isPen || tool == .eraser || tool == .none)
         previousTool = tool
         tool = t
@@ -591,6 +593,7 @@ final class WorkspaceModel {
     }
 
     func duplicateSelection() {
+        if isPDF { mkDuplicateSelection(); return }
         guard !selection.isEmpty else { return }
         var ids: [ID] = []
         let ordered = currentStrokes.filter { selection.contains($0.id) }.map(\.id)
@@ -1153,6 +1156,7 @@ final class WorkspaceModel {
         let info = tool.info
         switch info.kind {
         case .place:
+            if tool == .image || tool == .signature { app.flash("\(tool.info.label.components(separatedBy: " — ")[0]) works in PDF markups"); return }
             commit(newStroke(tool, at: p, pressure: 0.5, isPencil: false), page: i)
         case .text:
             beginTextEdit(at: p, page: i)

@@ -157,6 +157,10 @@ struct StylePopoverView: View {
                     .padding(.top, 16)
             }
 
+            if tool == .signature {
+                SecondaryButton(label: "Manage signatures…", symbol: "signature") { editor.mk.signaturePadOn = true; editor.closePopovers() }
+                    .padding(.bottom, 12)
+            }
             if tool == .cloud && target == .color {
                 SectionLabel(text: "Border shape").padding(.top, 16).padding(.bottom, 8)
                 SegmentControl(options: [SegmentOption(value: "arcs", label: "Cloud"), SegmentOption(value: "straight", label: "Straight")],

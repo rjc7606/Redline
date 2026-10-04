@@ -351,6 +351,105 @@ enum AnnotationFactory {
         return a
     }
 
+    /// A detached copy of an annotation (not on any page): same look and keys, a fresh Redline id, no replies,
+    /// page or appearance references, so it can be added to any page of any document. Group links are rebuilt by
+    /// `cloneGroup`.
+    static func clone(_ a: PDFAnnotation) -> PDFAnnotation? {
+        var props: [AnyHashable: Any] = [:]
+        let dropped: Set<String> = ["/P", "/Popup", "/IRT", "/RT", "/AP", "/AS", "/RedlineID", "/RedlineGroup", "/Parent", "/Kids", "/StructParent", "/NM"]
+        for (k, v) in a.annotationKeyValues {
+            let key = (k as? String) ?? (k as? PDFAnnotationKey)?.rawValue ?? ""
+            if dropped.contains(key) || dropped.contains("/" + key) { continue }
+            props[k] = v
+        }
+        let sub = PDFAnnotationSubtype(rawValue: "/" + a.subtype)
+        let ours = a.redlineID != nil
+        let c: PDFAnnotation
+        switch a.subtype {
+        case "Ink": c = ours ? RedlineInk(bounds: a.bounds, forType: .ink, withProperties: props) : PDFAnnotation(bounds: a.bounds, forType: .ink, withProperties: props)
+        case "FreeText": c = ours ? RedlineFreeText(bounds: a.bounds, forType: .freeText, withProperties: props) : PDFAnnotation(bounds: a.bounds, forType: .freeText, withProperties: props)
+        case "Text": c = ours ? RedlineNote(bounds: a.bounds, forType: .text, withProperties: props) : PDFAnnotation(bounds: a.bounds, forType: .text, withProperties: props)
+        case "Line": c = ours ? RedlineLine(bounds: a.bounds, forType: .line, withProperties: props) : PDFAnnotation(bounds: a.bounds, forType: .line, withProperties: props)
+        case "Square", "Circle": c = ours ? RedlineShape(bounds: a.bounds, forType: sub, withProperties: props) : PDFAnnotation(bounds: a.bounds, forType: sub, withProperties: props)
+        case "Polygon": c = RedlinePolygon(bounds: a.bounds, forType: sub, withProperties: props)
+        case "Highlight", "Underline", "StrikeOut", "Squiggly": c = ours ? RedlineMarkup(bounds: a.bounds, forType: sub, withProperties: props) : PDFAnnotation(bounds: a.bounds, forType: sub, withProperties: props)
+        case "Widget": c = RedlineWidget(bounds: a.bounds, forType: .widget, withProperties: props)
+        case "Stamp":
+            // An image stamp only copies when its pixels are still in the session store (the clone gets its own id).
+            guard let img = ImageStore.shared.image(for: a.redlineID) else { return nil }
+            let r = RedlineImage(bounds: a.bounds, forType: .stamp, withProperties: props)
+            let id = IDGen.make()
+            r.setValue(NSString(string: id), forAnnotationKey: .redlineID)
+            ImageStore.shared.set(img, for: id)
+            r.modificationDate = Date()
+            return r
+        case "Popup", "Link": return nil
+        default: c = PDFAnnotation(bounds: a.bounds, forType: sub, withProperties: props)
+        }
+        // Geometry PDFKit keeps outside the key dictionary.
+        if a.subtype == "Ink" { setInkPaths(c, inkPaths(a)) }
+        if a.subtype == "Line" { c.startPoint = a.startPoint; c.endPoint = a.endPoint; c.startLineStyle = a.startLineStyle; c.endLineStyle = a.endLineStyle }
+        if let q = a.quadrilateralPoints { c.quadrilateralPoints = q }
+        if a.subtype == "Polygon" { c.polygonVertices = a.polygonVertices }
+        c.color = a.color
+        c.interiorColor = a.interiorColor
+        c.fontColor = a.fontColor
+        c.font = a.font
+        c.contents = a.contents
+        c.border = a.border
+        c.alignment = a.alignment
+        c.shouldDisplay = a.shouldDisplay
+        c.modificationDate = Date()
+        if a.subtype == "Widget" {
+            c.widgetFieldType = a.widgetFieldType; c.widgetControlType = a.widgetControlType
+            c.fieldName = (a.fieldName ?? "field") + "_copy"; c.widgetStringValue = a.widgetStringValue; c.choices = a.choices
+        }
+        if ours || a.subtype == "Polygon" || a.subtype == "Widget" { c.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID) }
+        return c
+    }
+
+    /// Clones a set of annotations, keeping their groups (callout box + leader, outline + fill, line + label).
+    static func cloneGroup(_ annots: [PDFAnnotation]) -> [PDFAnnotation] {
+        var map: [ObjectIdentifier: PDFAnnotation] = [:]
+        var out: [PDFAnnotation] = []
+        for a in annots { if let c = clone(a) { map[ObjectIdentifier(a)] = c; out.append(c) } }
+        var gids: [String: String] = [:]
+        for a in annots {
+            guard let c = map[ObjectIdentifier(a)] else { continue }
+            if let g = a.value(forAnnotationKey: .redlineGroup) as? String {
+                let ng = gids[g] ?? IDGen.make(); gids[g] = ng
+                c.setValue(NSString(string: ng), forAnnotationKey: .redlineGroup)
+            }
+            if let parent = a.value(forAnnotationKey: .inReplyTo) as? PDFAnnotation, let np = map[ObjectIdentifier(parent)] {
+                c.setValue(np, forAnnotationKey: .inReplyTo)
+                if let rt = a.value(forAnnotationKey: .replyType) as? String { c.setValue(NSString(string: rt), forAnnotationKey: .replyType) }
+            }
+        }
+        return out
+    }
+
+    /// Image stamp centred on `p`, `width` points wide (aspect kept).
+    static func image(_ img: UIImage, at p: CGPoint, width: CGFloat, author: String) -> PDFAnnotation {
+        let aspect = max(0.05, img.size.height / max(1, img.size.width))
+        let h = width * aspect
+        let a = RedlineImage(bounds: CGRect(x: p.x - width / 2, y: p.y - h / 2, width: width, height: h), forType: .stamp, withProperties: nil)
+        let id = IDGen.make()
+        a.setValue(NSString(string: id), forAnnotationKey: .redlineID)
+        ImageStore.shared.set(img, for: id)
+        stamp(a, tool: .image, author: author)
+        return a
+    }
+
+    /// A saved signature placed as ink, `width` points wide, centred on `p`.
+    static func signature(_ sig: SavedSignature, at p: CGPoint, width: CGFloat, style: StylePreset, author: String) -> PDFAnnotation {
+        let k = width / CGFloat(max(1, sig.width))
+        let h = CGFloat(sig.height) * k
+        // pad space is y-down; page space is y-up
+        let paths: [[CGPoint]] = sig.paths.map { $0.map { CGPoint(x: p.x - width / 2 + CGFloat($0.x) * k, y: p.y + h / 2 - CGFloat($0.y) * k) } }
+        var st = style; st.width = max(1, min(4, style.width))
+        return ink(paths: paths, tool: .signature, style: st, author: author)
+    }
+
     /// Small measurement label (a text box grouped under the measured line so they move together).
     static func measureLabel(_ text: String, near p: CGPoint, color: String, author: String, root: PDFAnnotation) -> PDFAnnotation {
         var st = StylePreset(color: color, width: 1, background: "#FFFFFF", backgroundOpacity: 0.9, borderColor: color, borderOpacity: 1, borderWidth: 1)

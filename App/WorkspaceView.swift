@@ -145,6 +145,8 @@ struct KeyboardShortcuts: View {
             Button("Undo") { editor.undo() }.keyboardShortcut("z", modifiers: .command)
             Button("Redo") { editor.redo() }.keyboardShortcut("z", modifiers: [.command, .shift])
             Button("Duplicate") { editor.duplicateSelection() }.keyboardShortcut("d", modifiers: .command)
+            Button("Copy") { if editor.isPDF { editor.mkCopySelection() } }.keyboardShortcut("c", modifiers: .command)
+            Button("Paste") { if editor.isPDF { editor.mkPaste() } }.keyboardShortcut("v", modifiers: .command)
             Button("Select all") { editor.selectAll() }.keyboardShortcut("a", modifiers: .command)
             Button("Delete") { editor.deleteSelection() }.keyboardShortcut(.delete, modifiers: [])
             Button("Escape") { _ = editor.handleKey(.escape, modifiers: []) }.keyboardShortcut(.escape, modifiers: [])

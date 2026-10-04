@@ -44,6 +44,8 @@ final class AppModel {
     var editor: WorkspaceModel? = nil
     /// Documents open in the workspace, in tab order; each keeps its editor (tool, page, zoom, undo) while open.
     var openDocs: [ID] = []
+    /// Copied annotations (detached clones) — paste into any open PDF.
+    var clipboard: [PDFAnnotation] = []
     @ObservationIgnored private var editors: [ID: WorkspaceModel] = [:]
 
     var settingsOpen = false

@@ -188,12 +188,12 @@ public enum ToolCatalog {
         .note: ToolInfo(label: "Sticky note", kind: .place, glyph: "M6 4h12a2 2 0 0 1 2 2v7h-5a2 2 0 0 0 -2 2v5h-7a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2z", glyph2: "M20 13v.172a2 2 0 0 1 -.586 1.414l-4.828 4.828a2 2 0 0 1 -1.414 .586h-.172", hasPresets: true),
         .callout: ToolInfo(label: "Callout", kind: .shape, glyph: "M9 3.5h11.5v9H9z", glyph2: "M12 7h5.5M12 9.5h3.5M9 12.5L3.5 20.5M3.5 20.5l.8-4.2M3.5 20.5l4.2-.8", hasPresets: true),
         .stamps: ToolInfo(label: "Stamps", kind: .stampGallery, symbol: "seal"),
-        .signature: ToolInfo(label: "Signature", kind: .ink, symbol: "signature", hasPresets: true),
+        .signature: ToolInfo(label: "Signature — tap to place your saved signature", kind: .place, symbol: "signature", hasPresets: true),
         .datestamp: ToolInfo(label: "Date stamp", kind: .stampPreset, symbol: "calendar.badge.checkmark", stampText: "RECEIVED", stampColor: "#FF3B30"),
         .initials: ToolInfo(label: "Initials", kind: .stampPreset, symbol: "textformat.abc", stampText: "T.M.", stampColor: "#007AFF"),
 
         .edittext: ToolInfo(label: "Edit text", kind: .flash, symbol: "text.cursor", message: "Edit text — coming soon"),
-        .image: ToolInfo(label: "Insert image", kind: .flash, symbol: "photo.badge.plus", message: "Insert image — coming soon"),
+        .image: ToolInfo(label: "Insert image — pick a photo, then tap the page", kind: .place, symbol: "photo.badge.plus"),
         .link: ToolInfo(label: "Link", kind: .flash, symbol: "link", message: "Add link — coming soon"),
         .redact: ToolInfo(label: "Redact", kind: .shape, symbol: "eye.slash"),
         .rotatepg: ToolInfo(label: "Rotate page", kind: .pageAction, symbol: "rotate.right", pageAction: .rotate),
@@ -257,5 +257,18 @@ public struct StampDef: Codable, Sendable, Hashable, Identifiable {
             .replacingOccurrences(of: "{time}", with: f.string(from: now))
             .replacingOccurrences(of: "{author}", with: author)
             .replacingOccurrences(of: "{initials}", with: Avatar.initials(author) + ".")
+    }
+}
+
+
+/// A signature drawn once and placed many times (pad coordinates, y down).
+public struct SavedSignature: Codable, Sendable, Hashable, Identifiable {
+    public var id: String
+    public var name: String
+    public var paths: [[Point]]
+    public var width: Double
+    public var height: Double
+    public init(id: String = IDGen.make(), name: String, paths: [[Point]], width: Double, height: Double) {
+        self.id = id; self.name = name; self.paths = paths; self.width = width; self.height = height
     }
 }

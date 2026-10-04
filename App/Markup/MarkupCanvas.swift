@@ -1,6 +1,8 @@
 import SwiftUI
 import UIKit
 import PDFKit
+import PhotosUI
+import UniformTypeIdentifiers
 import RedlineCore
 
 /// Redline's page stack (PDFStackView) plus a transparent input/drawing overlay, with SwiftUI overlays for the comment
@@ -28,6 +30,12 @@ struct MarkupCanvas: View {
         }
         .sheet(isPresented: Binding(get: { mk.calibratePending != nil }, set: { if !$0 { mk.calibratePending = nil } })) {
             CalibrateSheet(editor: editor)
+        }
+        .sheet(isPresented: Binding(get: { mk.imagePickerOn }, set: { mk.imagePickerOn = $0 })) {
+            ImagePickSheet(editor: editor)
+        }
+        .sheet(isPresented: Binding(get: { mk.signaturePadOn }, set: { mk.signaturePadOn = $0 })) {
+            SignatureSheet(editor: editor)
         }
     }
 }
@@ -114,7 +122,7 @@ struct SelectionChrome: View {
             let isWidget = mk.selectedPrimary?.isWidget ?? false
             let canComment = primaries == 1 && !mk.annotationPopup && !isWidget
             let canStyle = !isWidget && editor.mkSelectedPreset() != nil
-            let barW: CGFloat = 96 + (canComment ? 106 : 0) + (canStyle ? 118 : 0) + 86 + 36
+            let barW: CGFloat = 96 + (canComment ? 106 : 0) + (canStyle ? 118 : 0) + 86 + 36 + 92
             let x = min(max(8, r.midX - barW / 2), max(8, fw - barW - 8))
             let above = r.minY - 14 - 40 >= 8
             let y = above ? r.minY - 14 - 40 : min(r.maxY + 14, fh - 48)
@@ -135,6 +143,13 @@ struct SelectionChrome: View {
                             }
                             .foregroundStyle(mk.selectionProps ? theme.accent : theme.ink1).frame(height: 40).contentShape(Rectangle())
                         }.buttonStyle(.plain)
+                    }
+                    Menu {
+                        Button("Duplicate", systemImage: "plus.square.on.square") { editor.mkDuplicateSelection() }
+                        Button("Copy", systemImage: "doc.on.doc") { editor.mkCopySelection() }
+                    } label: {
+                        HStack(spacing: 5) { Image(systemName: "doc.on.doc").font(fnt(15, .medium)); Text("Copy").font(fnt(13, .semibold)) }
+                            .foregroundStyle(theme.ink1).frame(height: 40).contentShape(Rectangle())
                     }
                     Button { editor.mkDeleteSelection() } label: {
                         HStack(spacing: 5) { Image(systemName: "trash").font(fnt(15, .medium)); Text("Delete").font(fnt(13, .semibold)) }
@@ -813,5 +828,163 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         label.draw(at: CGPoint(x: pill.minX + 12, y: pill.minY + 6), withAttributes: [.font: font, .foregroundColor: r.lock ? UIColor.white : UIColor.darkGray])
         UIGraphicsPopContext()
         cg.restoreGState()
+    }
+}
+
+
+/// Insert image: a photo from the library or an image file from Files; then tap the page to place it.
+struct ImagePickSheet: View {
+    @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
+    var editor: WorkspaceModel
+    @State private var item: PhotosPickerItem? = nil
+    @State private var filesOn = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Insert image").font(titleFnt(20)).foregroundStyle(theme.ink1)
+            Text("Pick an image, then tap the page where it should go. Drag the corner to resize it afterwards.").font(fnt(14)).foregroundStyle(theme.ink3)
+            HStack(spacing: 10) {
+                PhotosPicker(selection: $item, matching: .images) {
+                    HStack(spacing: 7) { Image(systemName: "photo.on.rectangle").font(fnt(14, .semibold)); Text("Photo Library").font(fnt(14, .semibold)) }
+                        .foregroundStyle(.white).padding(.horizontal, 14).frame(height: 36)
+                        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(theme.accent))
+                }
+                SecondaryButton(label: "Files…", symbol: "folder") { filesOn = true }
+                Spacer()
+                SecondaryButton(label: "Cancel") { editor.mk.imagePickerOn = false; if editor.tool == .image { editor.tool = .none } }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 480)
+        .background(theme.bg2)
+        .presentationDetents([.height(200)])
+        .onChange(of: item) { _, it in
+            guard let it else { return }
+            Task { @MainActor in
+                if let data = try? await it.loadTransferable(type: Data.self), let img = UIImage(data: data) { took(img) }
+                else { app.flash("Couldn't load that image") }
+            }
+        }
+        .fileImporter(isPresented: $filesOn, allowedContentTypes: [UTType.image]) { result in
+            if case .success(let url) = result {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                if let data = try? Data(contentsOf: url), let img = UIImage(data: data) { took(img) } else { app.flash("Couldn't load that image") }
+            }
+        }
+    }
+
+    private func took(_ img: UIImage) {
+        // Keep memory sane: cap the longer side at 2000 px.
+        let maxSide: CGFloat = 2000
+        var image = img
+        if max(img.size.width, img.size.height) * img.scale > maxSide {
+            let k = maxSide / (max(img.size.width, img.size.height) * img.scale)
+            let size = CGSize(width: img.size.width * img.scale * k, height: img.size.height * img.scale * k)
+            let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 1
+            image = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in img.draw(in: CGRect(origin: .zero, size: size)) }
+        }
+        editor.mk.pendingImage = image
+        editor.mk.imagePickerOn = false
+        app.flash("Tap the page to place the image")
+    }
+}
+
+/// Draw a signature once; it is saved and placed by the Signature tool.
+struct SignatureSheet: View {
+    @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
+    var editor: WorkspaceModel
+    @State private var paths: [[CGPoint]] = []
+    @State private var current: [CGPoint] = []
+    @State private var name = "Signature"
+    @State private var padWidthOnScreen: CGFloat = 520
+    private let padSize = CGSize(width: 520, height: 200)
+
+    var body: some View {
+        let saved = app.settings.signatures ?? []
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Signatures").font(titleFnt(20)).foregroundStyle(theme.ink1)
+            if !saved.isEmpty {
+                SectionLabel(text: "Saved · first is the default")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 10) {
+                        ForEach(saved) { sig in
+                            VStack(spacing: 4) {
+                                SignaturePreview(sig: sig, color: theme.ink1).frame(width: 150, height: 60)
+                                    .background(RoundedRectangle(cornerRadius: 8).fill(theme.card))
+                                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(theme.line, lineWidth: 1))
+                                Text(sig.name).font(fnt(11.5, .medium)).foregroundStyle(theme.ink3).lineLimit(1)
+                            }
+                            .contextMenu {
+                                Button("Make default", systemImage: "star") { var s = app.settings; var list = s.signatures ?? []; list.removeAll { $0.id == sig.id }; list.insert(sig, at: 0); s.signatures = list; app.settings = s }
+                                Button("Delete", systemImage: "trash", role: .destructive) { var s = app.settings; s.signatures?.removeAll { $0.id == sig.id }; app.settings = s }
+                            }
+                            .onTapGesture { var s = app.settings; var list = s.signatures ?? []; list.removeAll { $0.id == sig.id }; list.insert(sig, at: 0); s.signatures = list; app.settings = s; editor.mk.signaturePadOn = false; app.flash("Tap the page to place it") }
+                        }
+                    }
+                }
+            }
+            SectionLabel(text: "Draw a new one")
+            Canvas { ctx, size in
+                let k = size.width / padSize.width
+                for path in paths + [current] where path.count > 1 {
+                    var p = Path(); p.move(to: CGPoint(x: path[0].x * k, y: path[0].y * k))
+                    for q in path.dropFirst() { p.addLine(to: CGPoint(x: q.x * k, y: q.y * k)) }
+                    ctx.stroke(p, with: .color(theme.ink1), style: StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                }
+                var base = Path(); base.move(to: CGPoint(x: 20, y: size.height * 0.75)); base.addLine(to: CGPoint(x: size.width - 20, y: size.height * 0.75))
+                ctx.stroke(base, with: .color(theme.line2), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+            }
+            .frame(height: padSize.height * padWidthOnScreen / padSize.width)
+            .background(RoundedRectangle(cornerRadius: 12).fill(theme.card))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(theme.line, lineWidth: 1))
+            .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                .onChanged { v in
+                    // The pad is drawn scaled to its width; store points in pad space.
+                    let k = padSize.width / max(1, padWidthOnScreen)
+                    current.append(CGPoint(x: v.location.x * k, y: v.location.y * k))
+                }
+                .onEnded { _ in if current.count > 1 { paths.append(current) }; current = [] })
+            .background(GeometryReader { g in Color.clear.onAppear { padWidthOnScreen = g.size.width }.onChange(of: g.size.width) { _, w in padWidthOnScreen = w } })
+            HStack(spacing: 10) {
+                FieldText(placeholder: "Name", text: $name, height: 36, font: fnt(14)).frame(width: 200)
+                SecondaryButton(label: "Clear") { paths = []; current = [] }
+                Spacer()
+                SecondaryButton(label: "Close") { editor.mk.signaturePadOn = false }
+                PrimaryButton(label: "Save signature") {
+                    let all = paths.flatMap { $0 }
+                    guard let minX = all.map(\.x).min(), let maxX = all.map(\.x).max(), let minY = all.map(\.y).min(), let maxY = all.map(\.y).max(), maxX > minX else { return }
+                    let sig = SavedSignature(name: name.isEmpty ? "Signature" : name,
+                                             paths: paths.map { $0.map { Point(Double($0.x - minX), Double($0.y - minY)) } },
+                                             width: Double(maxX - minX), height: Double(max(1, maxY - minY)))
+                    var s = app.settings; s.signatures = [sig] + (s.signatures ?? []); app.settings = s
+                    paths = []; current = []
+                    editor.mk.signaturePadOn = false
+                    app.flash("Saved. Tap the page to place it.")
+                }.disabled(paths.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 620)
+        .background(theme.bg2)
+        .presentationDetents([.large])
+    }
+}
+
+struct SignaturePreview: View {
+    var sig: SavedSignature
+    var color: Color
+    var body: some View {
+        Canvas { ctx, size in
+            let k = min((size.width - 12) / CGFloat(max(1, sig.width)), (size.height - 12) / CGFloat(max(1, sig.height)))
+            let ox = (size.width - CGFloat(sig.width) * k) / 2, oy = (size.height - CGFloat(sig.height) * k) / 2
+            for path in sig.paths where path.count > 1 {
+                var p = Path(); p.move(to: CGPoint(x: ox + CGFloat(path[0].x) * k, y: oy + CGFloat(path[0].y) * k))
+                for q in path.dropFirst() { p.addLine(to: CGPoint(x: ox + CGFloat(q.x) * k, y: oy + CGFloat(q.y) * k)) }
+                ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
+            }
+        }
     }
 }

@@ -73,6 +73,8 @@ extension PDFAnnotation {
     var isRedlineWidget: Bool { subtype == "Widget" && redlineID != nil }
     /// A rectangle / ellipse drawn by Redline.
     var isRedlineShape: Bool { (subtype == "Square" || subtype == "Circle") && redlineID != nil }
+    /// An image stamp placed by Redline (its pixels live in the appearance stream; in-session also in ImageStore).
+    var isRedlineImage: Bool { subtype == "Stamp" && redlineID != nil }
     /// A reply or review-state note Redline made: gets a blank appearance so no reader draws it.
     var isRedlineHiddenNote: Bool { (isReply || isStateAnnotation) && redlineID != nil }
     /// Pen / marker ink drawn by Redline (PDFKit ignores an Ink annotation's opacity and doubles overlaps).
@@ -383,6 +385,36 @@ enum WidgetRenderer {
     }
 }
 
+/// Images placed this session, by Redline id (after a reload the appearance stream carries the pixels).
+final class ImageStore: @unchecked Sendable {
+    static let shared = ImageStore()
+    private var images: [String: UIImage] = [:]
+    func image(for id: String?) -> UIImage? { id.flatMap { images[$0] } }
+    func set(_ img: UIImage, for id: String) { images[id] = img }
+}
+
+/// Image stamp: drawn from the in-session image when there is one, else from its appearance stream.
+final class RedlineImage: PDFAnnotation {
+    override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        guard let img = ImageStore.shared.image(for: redlineID), let cg = img.cgImage else { super.draw(with: box, in: context); return }
+        context.saveGState()
+        context.interpolationQuality = .high
+        context.draw(cg, in: bounds)
+        context.restoreGState()
+    }
+}
+
+enum ImageRenderer {
+    static func appearancePDF(for a: PDFAnnotation) -> Data? {
+        guard let img = ImageStore.shared.image(for: a.redlineID) else { return nil }
+        let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
+        return UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+            c.beginPage()
+            img.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+}
+
 /// A blank appearance (a content stream that paints nothing) for notes that must stay invisible.
 enum BlankRenderer {
     static func appearancePDF(for a: PDFAnnotation) -> Data {
@@ -628,7 +660,7 @@ enum TextBoxRenderer {
 enum AppearancePatcher {
     @discardableResult
     static func patch(fileURL: URL, annotations: [PDFAnnotation]) -> Bool {
-        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || $0.isRedlineInk || $0.isRedlineShape || $0.isRedlineHiddenNote || WidgetRenderer.wantsAppearance($0) }
+        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || $0.isRedlineInk || $0.isRedlineShape || $0.isRedlineHiddenNote || WidgetRenderer.wantsAppearance($0) || ($0.isRedlineImage && ImageStore.shared.image(for: $0.redlineID) != nil) }
         guard !ours.isEmpty, let data = try? Data(contentsOf: fileURL), let file = PDFFile(data: data) else { return ours.isEmpty }
         var byID: [String: (num: Int, dict: [String: PDFObj])] = [:]
         for page in file.pages() {
@@ -649,6 +681,7 @@ enum AppearancePatcher {
             else if a.isRedlineInk { helperData = InkRenderer.appearancePDF(for: a) }
             else if a.isRedlineShape { helperData = ShapeRenderer.appearancePDF(for: a) }
             else if a.isRedlineHiddenNote { helperData = BlankRenderer.appearancePDF(for: a) }
+            else if a.isRedlineImage { guard let d = ImageRenderer.appearancePDF(for: a) else { continue }; helperData = d }
             else { helperData = TextBoxRenderer.appearancePDF(for: a) }
             guard let helper = PDFFile(data: helperData), let page = helper.pages().first else { continue }
             let importer = PDFObjectImporter(source: helper, firstFreeNumber: next)
@@ -699,6 +732,7 @@ enum AppearancePatcher {
             || (a.isRedlinePolygon && !(a is RedlinePolygon)) || (a.isRedlineLine && !(a is RedlineLine))
             || (a.isRedlineWidget && !(a is RedlineWidget)) || (a.isRedlineMarkup && !(a is RedlineMarkup))
             || (a.isRedlineInk && !(a is RedlineInk)) || (a.isRedlineShape && !(a is RedlineShape))
+            || (a.isRedlineImage && !(a is RedlineImage))
     }
 
     /// Promotes a group of annotations in place: same page order, same keys (including /AP), replies re-pointed.
@@ -717,6 +751,7 @@ enum AppearancePatcher {
             else if a.isRedlineMarkup { r = RedlineMarkup(bounds: a.bounds, forType: PDFAnnotationSubtype(rawValue: "/" + a.subtype), withProperties: a.annotationKeyValues) }
             else if a.isRedlineInk { r = RedlineInk(bounds: a.bounds, forType: .ink, withProperties: a.annotationKeyValues) }
             else if a.isRedlineShape { r = RedlineShape(bounds: a.bounds, forType: a.subtype == "Circle" ? .circle : .square, withProperties: a.annotationKeyValues) }
+            else if a.isRedlineImage { r = RedlineImage(bounds: a.bounds, forType: .stamp, withProperties: a.annotationKeyValues) }
             else { r = RedlineFreeText(bounds: a.bounds, forType: .freeText, withProperties: a.annotationKeyValues) }
             map[ObjectIdentifier(a)] = r
             page.addAnnotation(r)

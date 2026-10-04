@@ -145,4 +145,11 @@ swift test
   totals), each committed with a grouped label that moves with it, and Calibrate (drag along a known length, enter
   what it is in feet, inches, metres or millimetres) which sets the document's scale; uncalibrated documents measure
   in the sheet's own inches. Find (magnifier in the top bar) searches the PDF text and highlights every hit.
-- Edit text / insert image / link / crop and append/extract pages currently show a "coming soon" toast.
+- Copy, paste and duplicate annotations (selection bar menu, Paste in the tool bar, ⌘C ⌘V ⌘D): groups such as
+  callouts, filled outlines and measurements stay grouped; pastes land centred in view on the current page of
+  whichever document is open.
+- Insert image (Edit tab): a photo from the library or an image file from Files, placed with a tap, resized by its
+  corner; the pixels go into the appearance stream so every reader shows them. Organize Pages has Append PDF… and
+  an Extract button per page (a one-page PDF added to the library). The Signature tool places your saved signature
+  (draw it once in the pad; manage, reorder and delete from the Signature tool's editor).
+- Edit text / link / crop currently show a "coming soon" toast.
