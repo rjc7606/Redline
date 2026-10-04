@@ -446,7 +446,7 @@ extension WorkspaceModel {
         if a.subtype == "Square" || a.subtype == "Circle" {
             if let ic = a.interiorColor { p.fill = PDFColors.hex(ic); p.fillPattern = .solid; var al: CGFloat = 1; ic.getWhite(nil, alpha: &al); p.fillOpacity = Double(al) } else { p.fillPattern = FillPattern.none }
         }
-        p.lineStyle = AnnotationFactory.lineStyle(of: a.border)
+        p.lineStyle = AnnotationFactory.lineStyle(of: a)
         _ = tool
         return p
     }
@@ -466,6 +466,7 @@ extension WorkspaceModel {
             b.lineWidth = CGFloat(p.width)
             AnnotationFactory.applyLineStyle(p.lineStyle, width: CGFloat(p.width), to: b)
             a.border = b
+            a.setValue(NSString(string: (p.lineStyle ?? .solid).rawValue), forAnnotationKey: .redlineLineStyle)
             if a.subtype == "Square" || a.subtype == "Circle" {
                 if let fp = p.fillPattern, fp != FillPattern.none { a.interiorColor = PDFColors.uiColor(p.fill ?? p.color, alpha: p.fillOpacity ?? 0.5) } else { a.interiorColor = nil }
             }

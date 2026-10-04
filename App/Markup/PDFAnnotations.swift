@@ -15,6 +15,9 @@ extension PDFAnnotationKey {
     static let opacity = PDFAnnotationKey(rawValue: "/CA")
     /// Redline's own copy of the opacity: PDFKit does not reliably hand /CA back, which drew markers solid.
     static let redlineOpacity = PDFAnnotationKey(rawValue: "/RedlineOpacity")
+    /// Redline's own copy of the line style ("solid" / "dash" / "dot"): PDFKit rounds dash lengths to whole points,
+    /// which turned thin dashes solid and dots into dashes. Lengths are recomputed from the width when drawing.
+    static let redlineLineStyle = PDFAnnotationKey(rawValue: "/RedlineLineStyle")
     static let redlineTool = PDFAnnotationKey(rawValue: "/RedlineTool")
     static let redlineGroup = PDFAnnotationKey(rawValue: "/RedlineGroup")
 }
@@ -96,16 +99,26 @@ enum AnnotationFactory {
         case .dot: border.style = .dashed; border.dashPattern = [NSNumber(value: 0.01), NSNumber(value: Double(w) * 2.2)]
         }
     }
-    /// The line style a border encodes (a first dash under half a point means dotted).
-    static func lineStyle(of border: PDFBorder?) -> LineStyle {
-        guard let b = border, b.style == .dashed else { return .solid }
+    /// Records the style on the annotation (own key) and on its border (for other readers).
+    static func setLineStyle(_ ls: LineStyle?, on a: PDFAnnotation) {
+        a.setValue(NSString(string: (ls ?? .solid).rawValue), forAnnotationKey: .redlineLineStyle)
+        if let b = a.border { applyLineStyle(ls, width: b.lineWidth, to: b); a.border = b }
+    }
+    /// The annotation's line style: Redline's key first, then the border (a first dash under half a point = dotted).
+    static func lineStyle(of a: PDFAnnotation) -> LineStyle {
+        if let raw = a.value(forAnnotationKey: .redlineLineStyle) as? String, let ls = LineStyle(rawValue: raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))) { return ls }
+        guard let b = a.border, b.style == .dashed else { return .solid }
         if let first = (b.dashPattern as? [NSNumber])?.first?.doubleValue, first < 0.5 { return .dot }
         return .dash
     }
-    /// CG dash lengths for a border, or nil when solid.
-    static func dashLengths(of border: PDFBorder?) -> [CGFloat]? {
-        guard let b = border, b.style == .dashed, let d = b.dashPattern as? [NSNumber], !d.isEmpty else { return nil }
-        return d.map { CGFloat($0.doubleValue) }
+    /// CG dash lengths for drawing, computed from the current width (never read back from the border), or nil when solid.
+    static func dashLengths(of a: PDFAnnotation) -> [CGFloat]? {
+        let w = max(0.5, a.border?.lineWidth ?? 1)
+        switch lineStyle(of: a) {
+        case .solid: return nil
+        case .dash: return [w * 3, w * 2]
+        case .dot: return [0.01, w * 2.2]
+        }
     }
 
     private static func stamp(_ a: PDFAnnotation, tool: Tool, author: String, contents: String = "") {
@@ -134,6 +147,7 @@ enum AnnotationFactory {
         border.lineWidth = w
         applyLineStyle(style.lineStyle, width: w, to: border)
         a.border = border
+        a.setValue(NSString(string: (style.lineStyle ?? .solid).rawValue), forAnnotationKey: .redlineLineStyle)
         for p in paths { a.add(bezier(for: p, in: b)) }
         if let op = style.opacity, op < 1 { a.opacityValue = op }
         stamp(a, tool: tool, author: author)
@@ -227,6 +241,7 @@ enum AnnotationFactory {
         border.lineWidth = w
         applyLineStyle(style.lineStyle, width: w, to: border)
         a.border = border
+        a.setValue(NSString(string: (style.lineStyle ?? .solid).rawValue), forAnnotationKey: .redlineLineStyle)
         if let fp = style.fillPattern, fp != FillPattern.none { a.interiorColor = PDFColors.uiColor(style.fill ?? style.color, alpha: style.fillOpacity ?? 0.5) }
         if let op = style.opacity, op < 1 { a.opacityValue = op }
         stamp(a, tool: tool, author: author)
@@ -273,6 +288,7 @@ enum AnnotationFactory {
         border.lineWidth = w
         applyLineStyle(style.lineStyle, width: w, to: border)
         a.border = border
+        a.setValue(NSString(string: (style.lineStyle ?? .solid).rawValue), forAnnotationKey: .redlineLineStyle)
         a.startPoint = CGPoint(x: p0.x - b.minX, y: p0.y - b.minY)
         a.endPoint = CGPoint(x: p1.x - b.minX, y: p1.y - b.minY)
         if tool == .arrow || tool == .dblarrow { a.endLineStyle = .openArrow }

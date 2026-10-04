@@ -148,7 +148,7 @@ enum InkRenderer {
         cg.setStrokeColor(a.color.cgColor)
         cg.setLineWidth(w)
         cg.setLineCap(.round); cg.setLineJoin(.round)
-        if let d = AnnotationFactory.dashLengths(of: a.border) { cg.setLineDash(phase: 0, lengths: d) }
+        if let d = AnnotationFactory.dashLengths(of: a) { cg.setLineDash(phase: 0, lengths: d) }
         for path in paths {
             guard let f = path.first else { continue }
             cg.move(to: CGPoint(x: f.x - origin.x, y: f.y - origin.y))
@@ -404,7 +404,7 @@ enum ShapeRenderer {
         if w > 0.05 {
             cg.setStrokeColor(a.color.cgColor)
             cg.setLineWidth(w); cg.setLineCap(.round); cg.setLineJoin(.round)
-            if let d = AnnotationFactory.dashLengths(of: a.border) { cg.setLineDash(phase: 0, lengths: d) }
+            if let d = AnnotationFactory.dashLengths(of: a) { cg.setLineDash(phase: 0, lengths: d) }
             cg.addPath(path); cg.strokePath()
         }
         cg.restoreGState()
@@ -442,7 +442,7 @@ enum LineRenderer {
         cg.setStrokeColor(a.color.cgColor)
         cg.setLineWidth(w)
         cg.setLineCap(.round); cg.setLineJoin(.round)
-        if let d = AnnotationFactory.dashLengths(of: a.border) { cg.setLineDash(phase: 0, lengths: d) }
+        if let d = AnnotationFactory.dashLengths(of: a) { cg.setLineDash(phase: 0, lengths: d) }
         cg.move(to: p0); cg.addLine(to: p1); cg.strokePath()
         cg.setLineDash(phase: 0, lengths: [])
         let size = max(10, w * 4)
