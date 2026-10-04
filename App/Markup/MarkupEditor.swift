@@ -125,7 +125,11 @@ final class MarkupState {
     var eraserPoint: CGPoint? = nil
     var eraserPage: PDFPage? = nil
     /// `mkComments()` result for the current render tick and filter (rebuilding it per view body was seconds on busy pages).
-    @ObservationIgnored var commentsCache: (tick: Int, filter: AuthorFilter, items: [MarkupComment])? = nil
+    @ObservationIgnored var commentsCache: (tick: Int, key: String, items: [MarkupComment])? = nil
+    /// Link tool: the box was drawn; waiting for the address / page.
+    var linkPending: (page: PDFPage, rect: CGRect)? = nil
+    /// Flatten sheet (what to burn in).
+    var flattenSheet = false
 
     var selectedPrimary: PDFAnnotation? { selected.first { $0.isPrimary } ?? selected.first }
     var pageCount: Int { pdf?.pageCount ?? 0 }
@@ -193,7 +197,7 @@ extension WorkspaceModel {
         let since = mk.lastSaveDate?.addingTimeInterval(-2)
         for i in 0..<pdf.pageCount {
             guard let p = pdf.page(at: i) else { continue }
-            for a in p.annotations where a.isRedlineTextBox || a.isRedlineNote || a.isRedlinePolygon || a.isRedlineLine || a.isRedlineMarkup || a.isRedlineInk || a.isRedlineShape || a.isRedlineHiddenNote || WidgetRenderer.wantsAppearance(a) {
+            for a in p.annotations where a.isRedlineTextBox || a.isRedlineNote || a.isRedlinePolygon || a.isRedlineLine || a.isRedlineMarkup || a.isRedlineInk || a.isRedlineShape || a.isRedlineHiddenNote || WidgetRenderer.wantsAppearance(a) || (a.isRedlineImage && ImageStore.shared.image(for: a.redlineID) != nil) {
                 // Untouched annotations keep the stream PDFKit carries over from the last save.
                 let fresh = since.map { (a.modificationDate ?? .distantFuture) >= $0 } ?? true
                 if fresh || a.value(forAnnotationKey: .appearanceDictionary) == nil { ours.append(a) }
@@ -278,7 +282,197 @@ extension WorkspaceModel {
     }
 
     /// Highlights, underlines, strikeouts and squiggles are anchored to the page text: never moved or resized.
-    func mkIsLocked(_ a: PDFAnnotation) -> Bool { ["Highlight", "Underline", "StrikeOut", "Squiggly"].contains(a.subtype) }
+    func mkIsLocked(_ a: PDFAnnotation) -> Bool { ["Highlight", "Underline", "StrikeOut", "Squiggly"].contains(a.subtype) || a.isLockedFlag }
+    /// Locked annotations (the PDF "Locked" flag) can be commented on but not moved, resized, restyled or deleted.
+    var mkSelectionLocked: Bool { mk.selected.contains { $0.isLockedFlag } }
+    func mkToggleLock() {
+        let targets = mk.selected.filter { $0.isPrimary }
+        guard !targets.isEmpty else { return }
+        let lock = !targets.allSatisfy(\.isLockedFlag)
+        mkPerform(.change(annots: targets.map { ($0, AnnotationSnapshot($0)) }), alreadyApplied: true)
+        for a in targets { a.isLockedFlag = lock; a.modificationDate = Date() }
+        mk.renderTick += 1
+        mkMarkDirty()
+        app.flash(lock ? "Locked — comments still allowed" : "Unlocked")
+    }
+
+    // MARK: rotate · flip
+
+    /// The one selected annotation that can be rotated: a Redline text box (not a callout) or an image stamp.
+    var mkRotatable: PDFAnnotation? {
+        guard mk.selected.filter(\.isPrimary).count == 1, let a = mk.selectedPrimary, !mkIsLocked(a) else { return nil }
+        if a.isRedlineTextBox && a.redlineTool != .callout { return a }
+        if a is RedlineImage { return a }
+        return nil
+    }
+    func mkBeginRotate(at p: CGPoint) {
+        guard let a = mkRotatable else { return }
+        let snap = AnnotationSnapshot(a)
+        if let img = a as? RedlineImage { _ = ImageStore.shared.resolve(img) }
+        let c = CGPoint(x: a.bounds.midX, y: a.bounds.midY)
+        mkDrag = .rotate(a: a, center: c, a0: atan2(p.y - c.y, p.x - c.x) * 180 / .pi, r0: a.rotationDegrees, snap: snap)
+        mkDragMoved = false
+    }
+    /// Sets the tilt, keeping the centre and the un-tilted size.
+    func mkSetRotation(_ a: PDFAnnotation, _ deg: CGFloat, base: AnnotationSnapshot) {
+        let c = CGPoint(x: base.bounds.midX, y: base.bounds.midY)
+        let inner = TextBoxRenderer.innerSize(outer: base.bounds.size, rotation: base.rotation)
+        let outer = TextBoxRenderer.outerSize(inner: inner, rotation: deg)
+        a.bounds = CGRect(x: c.x - outer.width / 2, y: c.y - outer.height / 2, width: outer.width, height: outer.height)
+        a.rotationDegrees = deg
+        a.modificationDate = Date()
+        a.dropAppearance()
+    }
+    static func mkNormalDegrees(_ d: CGFloat) -> CGFloat {
+        var x = (d + 180).truncatingRemainder(dividingBy: 360)
+        if x < 0 { x += 360 }
+        return x - 180
+    }
+    func mkRotateSelection(by deg: CGFloat) {
+        guard let a = mkRotatable else { return }
+        let snap = AnnotationSnapshot(a)
+        if let img = a as? RedlineImage { _ = ImageStore.shared.resolve(img) }
+        mkPerform(.change(annots: [(a, snap)]), alreadyApplied: true)
+        mkSetRotation(a, WorkspaceModel.mkNormalDegrees(a.rotationDegrees + deg), base: AnnotationSnapshot(a))
+        mk.renderTick += 1
+        mkMarkDirty()
+    }
+    func mkFlipSelection(horizontal: Bool) {
+        guard let a = mkRotatable as? RedlineImage else { return }
+        let snap = AnnotationSnapshot(a)
+        _ = ImageStore.shared.resolve(a)
+        mkPerform(.change(annots: [(a, snap)]), alreadyApplied: true)
+        if horizontal { a.flipH.toggle() } else { a.flipV.toggle() }
+        a.modificationDate = Date()
+        a.dropAppearance()
+        mk.renderTick += 1
+        mkMarkDirty()
+    }
+
+    // MARK: links
+
+    func mkLink(at p: CGPoint, page: PDFPage) -> PDFAnnotation? {
+        let pad = 4 / mkZoom
+        return page.annotations.last { $0.isLink && $0.bounds.insetBy(dx: -pad, dy: -pad).contains(p) }
+    }
+    func mkFollowLink(_ a: PDFAnnotation) {
+        if let u = a.url ?? (a.action as? PDFActionURL)?.url {
+            UIApplication.shared.open(u)
+            return
+        }
+        if let d = (a.action as? PDFActionGoTo)?.destination ?? a.destination, let pg = d.page, let pdf = mk.pdf {
+            let i = pdf.index(for: pg)
+            setPage(i)
+            mk.pdfView?.go(to: pg)
+            return
+        }
+        app.flash("This link has no destination")
+    }
+    /// Finishes the Link tool: a web address or a page in this document.
+    func mkAddLink(url: URL?, pageIndex: Int?) {
+        guard let pending = mk.linkPending else { return }
+        mk.linkPending = nil
+        let a = PDFAnnotation(bounds: pending.rect, forType: .link, withProperties: nil)
+        if let url {
+            a.url = url
+            a.action = PDFActionURL(url: url)
+        } else if let i = pageIndex, let target = mk.page(i) {
+            let h = PDFService.displaySize(target).height
+            a.action = PDFActionGoTo(destination: PDFDestination(page: target, at: CGPoint(x: 0, y: h)))
+        } else { return }
+        let b = PDFBorder(); b.lineWidth = 0; a.border = b
+        a.userName = app.author
+        a.modificationDate = Date()
+        mkPerform(.add(page: pending.page, annots: [a]))
+        mk.selected = [a]
+        mk.renderTick += 1
+        app.flash(url != nil ? "Link added — tap it with Select to open" : "Link to page \((pageIndex ?? 0) + 1) added")
+    }
+
+    // MARK: comments: next unresolved · report
+
+    /// Open comments in page order, whatever the sidebar's filters say.
+    private func mkAllOpenComments() -> [MarkupComment] {
+        let saved = (authorFilter, commentSort, commentShow)
+        authorFilter = .all; commentSort = .page; commentShow = .open
+        let items = mkComments()
+        (authorFilter, commentSort, commentShow) = saved
+        return items
+    }
+    func mkNextUnresolved() {
+        let open = mkAllOpenComments()
+        guard !open.isEmpty else { app.flash("No open comments"); return }
+        var next = open[0]
+        if let cur = mk.selectedPrimary, let i = open.firstIndex(where: { $0.annotation === cur }) { next = open[(i + 1) % open.count] }
+        sideTab = .comments
+        mkSelectComment(next)
+        mk.expandedComment = next.id
+        mk.editingComment = false
+    }
+
+    private func mkAllComments() -> [MarkupComment] {
+        let saved = (authorFilter, commentSort, commentShow)
+        authorFilter = .all; commentSort = .page; commentShow = .all
+        let items = mkComments()
+        (authorFilter, commentSort, commentShow) = saved
+        return items
+    }
+
+    /// A PDF listing every comment with its replies and status.
+    func mkCommentReportPDF() -> Data? {
+        let items = mkAllComments()
+        let pageRect = CGRect(x: 0, y: 0, width: 612, height: 792)
+        let margin: CGFloat = 54, width: CGFloat = 612 - 108
+        let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .short
+        let title = doc.name
+        return UIGraphicsPDFRenderer(bounds: pageRect).pdfData { c in
+            var y: CGFloat = 0
+            func newPage() { c.beginPage(); y = margin }
+            func line(_ s: String, font: UIFont, color: UIColor, indent: CGFloat = 0, spacing: CGFloat = 4) {
+                let ps = NSMutableParagraphStyle(); ps.lineBreakMode = .byWordWrapping
+                let att = NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color, .paragraphStyle: ps])
+                let box = CGSize(width: width - indent, height: CGFloat.greatestFiniteMagnitude)
+                let h = att.boundingRect(with: box, options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil).height.rounded(.up)
+                if y + h > pageRect.height - margin { newPage() }
+                att.draw(with: CGRect(x: margin + indent, y: y, width: width - indent, height: h), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)
+                y += h + spacing
+            }
+            newPage()
+            line(title, font: .boldSystemFont(ofSize: 20), color: .black, spacing: 2)
+            line("\(Formatting.plural(items.count, "comment")) · \(df.string(from: Date()))", font: .systemFont(ofSize: 11), color: .darkGray, spacing: 18)
+            for it in items {
+                line("Page \(it.pageIndex + 1) · \(it.author) · \(df.string(from: it.time)) · \(it.status.rawValue) · \(it.tool.label)", font: .boldSystemFont(ofSize: 11), color: .black, spacing: 2)
+                if !it.text.isEmpty { line(it.text, font: .systemFont(ofSize: 12), color: .black, spacing: 4) }
+                for rp in it.replies { line("↳ \(rp.author) · \(df.string(from: rp.time)): \(rp.text)", font: .systemFont(ofSize: 11), color: .darkGray, indent: 16, spacing: 2) }
+                y += 10
+            }
+        }
+    }
+
+    /// Comments as CSV (page, author, date, status, type, text, replies).
+    func mkCommentCSV() -> String {
+        func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+        let iso = ISO8601DateFormatter()
+        var rows = ["Page,Author,Date,Status,Type,Comment,Replies"]
+        for it in mkAllComments() {
+            let replies = it.replies.map { "\($0.author): \($0.text)" }.joined(separator: " | ")
+            rows.append([String(it.pageIndex + 1), q(it.author), iso.string(from: it.time), it.status.rawValue, q(it.tool.label), q(it.text), q(replies)].joined(separator: ","))
+        }
+        return rows.joined(separator: "\r\n")
+    }
+
+    /// Authors who made annotations in this PDF.
+    func mkAuthors() -> [String] {
+        guard let pdf = mk.pdf else { return [] }
+        var seen: [String] = []
+        for i in 0..<pdf.pageCount {
+            for a in pdf.page(at: i)?.annotations ?? [] where a.isPrimary {
+                let n = a.userName ?? ""
+                if !n.isEmpty, !seen.contains(n) { seen.append(n) }
+            }
+        }
+        return seen
+    }
     /// The selected annotations that may move / resize.
     var mkMovableSelection: [PDFAnnotation] { mk.selected.filter { !mkIsLocked($0) } }
 
@@ -429,6 +623,7 @@ extension WorkspaceModel {
 
     func mkDeleteSelection() {
         guard let page = mk.selected.first?.page, !mk.selected.isEmpty else { return }
+        if mkSelectionLocked { app.flash("Locked — unlock it first"); return }
         var all = mk.selected
         for a in mk.selected { all.append(contentsOf: mkChildren(of: a, on: page)) }
         mkPerform(.remove(page: page, annots: all))
@@ -451,7 +646,8 @@ extension WorkspaceModel {
     // MARK: - Comments
 
     func mkComments() -> [MarkupComment] {
-        if let c = mk.commentsCache, c.tick == mk.renderTick, c.filter == authorFilter { return c.items }
+        let cacheKey = authorFilter.rawValue + "|" + commentSort.rawValue + "|" + commentShow.rawValue
+        if let c = mk.commentsCache, c.tick == mk.renderTick, c.key == cacheKey { return c.items }
         guard let pdf = mk.pdf else { return [] }
         var out: [MarkupComment] = []
         let me = app.author
@@ -490,8 +686,20 @@ extension WorkspaceModel {
                                          markCount: a.subtype == "Ink" ? strokes : group.count))
             }
         }
-        let sorted = out.sorted { $0.pageIndex != $1.pageIndex ? $0.pageIndex < $1.pageIndex : $0.time > $1.time }
-        mk.commentsCache = (mk.renderTick, authorFilter, sorted)
+        var shown = out
+        switch commentShow {
+        case .all: break
+        case .open: shown = shown.filter { $0.status == .open }
+        case .resolved: shown = shown.filter { $0.status != .open }
+        }
+        func byPage(_ a: MarkupComment, _ b: MarkupComment) -> Bool { a.pageIndex != b.pageIndex ? a.pageIndex < b.pageIndex : a.time > b.time }
+        let sorted: [MarkupComment]
+        switch commentSort {
+        case .page: sorted = shown.sorted(by: byPage)
+        case .newest: sorted = shown.sorted { $0.time > $1.time }
+        case .author: sorted = shown.sorted { $0.author != $1.author ? $0.author.localizedCaseInsensitiveCompare($1.author) == .orderedAscending : byPage($0, $1) }
+        }
+        mk.commentsCache = (mk.renderTick, cacheKey, sorted)
         return sorted
     }
 
@@ -562,7 +770,9 @@ extension WorkspaceModel {
             if let ic = a.interiorColor { p.fill = PDFColors.hex(ic); p.fillPattern = .solid; var al: CGFloat = 1; ic.getWhite(nil, alpha: &al); p.fillOpacity = Double(al) } else { p.fillPattern = FillPattern.none }
         }
         p.lineStyle = AnnotationFactory.lineStyle(of: a)
-        _ = tool
+        if a.subtype == "Line", [Tool.line, .arrow, .dblarrow].contains(tool) {
+            p.lineStart = LineEnding(a.startLineStyle); p.lineEnd = LineEnding(a.endLineStyle)
+        }
         return p
     }
 
@@ -585,6 +795,10 @@ extension WorkspaceModel {
             if a.subtype == "Square" || a.subtype == "Circle" {
                 if let fp = p.fillPattern, fp != FillPattern.none { a.interiorColor = PDFColors.uiColor(p.fill ?? p.color, alpha: p.fillOpacity ?? 0.5) } else { a.interiorColor = nil }
             }
+            if a.subtype == "Line" {
+                if let s = p.lineStart { a.startLineStyle = s.pdfStyle }
+                if let e = p.lineEnd { a.endLineStyle = e.pdfStyle }
+            }
         }
         a.opacityValue = p.opacity ?? 1
         a.modificationDate = Date()
@@ -595,7 +809,7 @@ extension WorkspaceModel {
     var mkSelectedTool: Tool? { mk.selectedPrimary?.redlineTool }
 
     func mkUpdateSelectedStyle(_ body: (inout StylePreset) -> Void) {
-        let targets = mk.selected.filter { !$0.isWidget }
+        let targets = mk.selected.filter { !$0.isWidget && !$0.isLockedFlag && !$0.isLink }
         guard !targets.isEmpty else { return }
         if !mk.styleSnapshotTaken {
             mkPerform(.change(annots: targets.map { ($0, AnnotationSnapshot($0)) }), alreadyApplied: true)
@@ -678,12 +892,21 @@ extension WorkspaceModel {
         return app.pdf.url(for: f)
     }
 
-    /// Flattened copy: pages rendered with their annotations burned in.
-    func mkFlattenedData() -> Data? {
+    /// Flattened copy: pages rendered with the chosen annotations burned in; the rest stay live annotations.
+    func mkFlattenedData(scope: FlattenScope = .all) -> Data? {
         guard let pdf = mk.pdf, pdf.pageCount > 0 else { return nil }
+        let sel = Set(mk.selected.map { ObjectIdentifier($0) })
+        func burns(_ a: PDFAnnotation) -> Bool {
+            let root = (a.value(forAnnotationKey: .inReplyTo) as? PDFAnnotation) ?? a   // replies, states and group members follow their parent
+            switch scope {
+            case .all: return true
+            case .selected: return sel.contains(ObjectIdentifier(root)) || sel.contains(ObjectIdentifier(a))
+            case .authors(let names): return names.contains(root.userName ?? "")
+            }
+        }
         let first = PDFService.displaySize(pdf.page(at: 0)!)
         let renderer = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: first))
-        return renderer.pdfData { c in
+        let data = renderer.pdfData { c in
             for i in 0..<pdf.pageCount {
                 guard let page = pdf.page(at: i) else { continue }
                 let size = PDFService.displaySize(page)
@@ -692,10 +915,19 @@ extension WorkspaceModel {
                 cg.saveGState()
                 cg.translateBy(x: 0, y: size.height)
                 cg.scaleBy(x: 1, y: -1)
-                PDFDraw.page(page, in: cg)
+                PDFDraw.content(of: page, in: cg)
+                PDFDraw.annotations(of: page, in: cg, include: burns)
                 cg.restoreGState()
             }
         }
+        if case .all = scope { return data }
+        guard let out = PDFDocument(data: data) else { return nil }
+        for i in 0..<pdf.pageCount {
+            guard let src = pdf.page(at: i), let dst = out.page(at: i) else { continue }
+            let keep = src.annotations.filter { !burns($0) && !$0.isPopup }
+            for c in AnnotationFactory.cloneGroup(keep, keepAppearance: true) { dst.addAnnotation(c) }
+        }
+        return out.dataRepresentation()
     }
 }
 
@@ -969,6 +1201,14 @@ extension WorkspaceModel {
         case .handle(let leader, let index, let snap):
             if !mkDragMoved { mkDragMoved = true; mkPerform(.change(annots: [(leader, snap)]), alreadyApplied: true) }
             mkMoveLeaderPoint(leader, index: index, to: p)
+        case .rotate(let a, let c, let a0, let r0, let snap):
+            if !mkDragMoved { mkDragMoved = true; mkPerform(.change(annots: [(a, snap)]), alreadyApplied: true) }
+            let ang = atan2(p.y - c.y, p.x - c.x) * 180 / .pi
+            var deg = WorkspaceModel.mkNormalDegrees(r0 - (ang - a0))   // page space is y-up; positive tilt = clockwise
+            let snapped = (deg / 15).rounded() * 15
+            if abs(deg - snapped) < 3 { deg = WorkspaceModel.mkNormalDegrees(snapped) }
+            mkSetRotation(a, deg, base: snap)
+            mkMarkDirty()
         case .erase:
             mk.eraserPoint = p; mk.eraserPage = page
             mkEraseAt(p, page: page)
@@ -1040,7 +1280,7 @@ extension WorkspaceModel {
             if !mkDragMoved, let a = mk.pendingTextEdit { mkBeginTextEdit(a, page: page, isNew: false) }
             mk.pendingTextEdit = nil
             mk.renderTick += 1
-        case .resize, .handle:
+        case .resize, .handle, .rotate:
             mk.renderTick += 1
         case .erase:
             mkEndErase(on: page)
@@ -1056,6 +1296,10 @@ extension WorkspaceModel {
                 // A clean tap on an annotation selects it, whatever tool is active.
                 if tool.kind == .fill, mkFillAt(p, page: page) { return }   // a bucket tap is always on top of something
                 if !onFormsTab, let w = mkAnnotation(at: p, page: page)?.annotation, w.isWidget { mkUseWidget(w); return }
+                if let l = mkLink(at: p, page: page) {
+                    if tool == .link { mk.selected = [l]; mk.annotationPopup = false; mk.renderTick += 1; return }
+                    if tool == .none || tool.info.kind == .select { mkFollowLink(l); return }
+                }
                 if mkSelectHit(at: p, page: page, splitStrokes: false) { return }
                 if tool.info.isTap || tool.kind == .fill { mkTap(at: p, page: page) }
                 else if tool == .none { mkClearSelection() }
@@ -1152,6 +1396,9 @@ extension WorkspaceModel {
             switch live.tool {
             case .rect, .ellipse: annots = [AnnotationFactory.shape(rect: rect, tool: live.tool, style: st, author: author)]
             case .redact: annots = [AnnotationFactory.redaction(rect: rect, author: author)]
+            case .link:
+                mk.linkPending = (page: page, rect: rect)
+                return
             case .line, .arrow, .dblarrow: annots = [AnnotationFactory.line(from: a, to: b, tool: live.tool, style: st, author: author)]
             case .distance:
                 let line = AnnotationFactory.line(from: a, to: b, tool: .distance, style: st, author: author)
@@ -1838,4 +2085,12 @@ final class PDFFilePresenter: NSObject, NSFilePresenter, @unchecked Sendable {
 
     func presentedItemDidChange() { onChange() }
     func presentedItemDidMove(to newURL: URL) { onChange() }
+}
+
+
+/// What a flattened export burns into the pages.
+enum FlattenScope {
+    case all
+    case selected
+    case authors(Set<String>)
 }

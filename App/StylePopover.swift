@@ -161,6 +161,22 @@ struct StylePopoverView: View {
                 SecondaryButton(label: "Manage signatures…", symbol: "signature") { editor.mk.signaturePadOn = true; editor.closePopovers() }
                     .padding(.bottom, 12)
             }
+            if [Tool.line, .arrow, .dblarrow].contains(tool) && target == .color {
+                let e = AnnotationFactory.endings(tool: tool, style: st)
+                SectionLabel(text: "Line endings").padding(.top, 16).padding(.bottom, 8)
+                VStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Text("Start").font(fnt(11.5, .semibold)).foregroundStyle(theme.ink3).frame(width: 36, alignment: .leading)
+                        SegmentControl(options: LineEnding.allCases.map { SegmentOption(value: $0, label: $0.label) },
+                                       selection: Binding(get: { e.start }, set: { v in set { $0.lineStart = v } }), fontSize: 11, vPad: 4, hPad: 4, radius: 8, fill: true)
+                    }
+                    HStack(spacing: 8) {
+                        Text("End").font(fnt(11.5, .semibold)).foregroundStyle(theme.ink3).frame(width: 36, alignment: .leading)
+                        SegmentControl(options: LineEnding.allCases.map { SegmentOption(value: $0, label: $0.label) },
+                                       selection: Binding(get: { e.end }, set: { v in set { $0.lineEnd = v } }), fontSize: 11, vPad: 4, hPad: 4, radius: 8, fill: true)
+                    }
+                }
+            }
             if tool == .cloud && target == .color {
                 SectionLabel(text: "Border shape").padding(.top, 16).padding(.bottom, 8)
                 SegmentControl(options: [SegmentOption(value: "arcs", label: "Cloud"), SegmentOption(value: "straight", label: "Straight")],

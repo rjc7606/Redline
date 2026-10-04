@@ -152,4 +152,14 @@ swift test
   corner; the pixels go into the appearance stream so every reader shows them. Organize Pages has Append PDF… and
   an Extract button per page (a one-page PDF added to the library). The Signature tool places your saved signature
   (draw it once in the pad; manage, reorder and delete from the Signature tool's editor).
-- Edit text / link / crop currently show a "coming soon" toast.
+- Lines and arrows: start and end endings (none, open, filled, dot, square) in the Properties popup; the live
+  preview shows them.
+- Rotate handle above text boxes, text stamps and images (snaps every 15°); More menu has rotate 90° and, for
+  images, flip. Lock / Unlock (More menu, ⇧⌘L) sets the PDF "Locked" flag: no move, resize, restyle or delete,
+  comments still allowed; other readers honour it too.
+- Links: tapping a link with Select or no tool follows it (web or page); the Link tool (Edit tab) draws a box and
+  asks for a web address or page number, shows existing links, and selects one to delete it.
+- Comments sidebar: sort (page / newest / author) and show (all / open / resolved) menu, "next unresolved" (⇧⌘U).
+  Export has a comment summary PDF and a CSV.
+- Flatten… lets you burn in everything, only the selection, or chosen authors; the rest stay editable.
+- Edit text / crop currently show a "coming soon" toast.

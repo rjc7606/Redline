@@ -22,13 +22,34 @@ struct PDFCommentsPanel: View {
                         .onTapGesture { editor.authorFilter = f }
                 }
                 Spacer()
+                Menu {
+                    Section("Sort") {
+                        ForEach(CommentSort.allCases, id: \.self) { s in
+                            Button { editor.commentSort = s } label: { if editor.commentSort == s { Label(s.rawValue, systemImage: "checkmark") } else { Text(s.rawValue) } }
+                        }
+                    }
+                    Section("Show") {
+                        ForEach(CommentShow.allCases, id: \.self) { s in
+                            Button { editor.commentShow = s } label: { if editor.commentShow == s { Label(s.rawValue, systemImage: "checkmark") } else { Text(s.rawValue) } }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease.circle" + (editor.commentShow != .all || editor.commentSort != .page ? ".fill" : ""))
+                        .font(fnt(17)).foregroundStyle(editor.commentShow != .all || editor.commentSort != .page ? theme.accent : theme.ink3)
+                        .frame(width: 28, height: 26).contentShape(Rectangle())
+                }
+                Button { editor.mkNextUnresolved() } label: {
+                    Image(systemName: "arrow.down.circle").font(fnt(17)).foregroundStyle(theme.ink3).frame(width: 28, height: 26).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Next unresolved comment")
             }
             .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(items) { c in PDFCommentRow(editor: editor, item: c) }
                     if items.isEmpty {
-                        Text("No annotations yet. Every mark you make is a PDF annotation with your name and time.")
+                        Text(editor.commentShow == .all && editor.authorFilter == .all ? "No annotations yet. Every mark you make is a PDF annotation with your name and time." : "Nothing matches the current filter.")
                             .font(fnt(12.5)).foregroundStyle(theme.ink4).multilineTextAlignment(.center).lineSpacing(3)
                             .padding(.vertical, 22).padding(.horizontal, 12)
                     }
@@ -625,6 +646,10 @@ enum PDFExport {
         case .saveToFiles:
             guard let data = editor.mkFlattenedData() else { return nil }
             return write(data, name: "\(base) — flattened.pdf", directory: AppModel.exportsDirectory)
+        case .commentSummary:
+            return editor.mkCommentReportPDF().flatMap { write($0, name: "\(base) — comments.pdf") }
+        case .commentCSV:
+            return editor.mkCommentCSV().data(using: .utf8).flatMap { write($0, name: "\(base) — comments.csv") }
         }
     }
 

@@ -37,6 +37,12 @@ struct MarkupCanvas: View {
         .sheet(isPresented: Binding(get: { mk.signaturePadOn }, set: { mk.signaturePadOn = $0 })) {
             SignatureSheet(editor: editor)
         }
+        .sheet(isPresented: Binding(get: { mk.linkPending != nil }, set: { if !$0 { mk.linkPending = nil } })) {
+            LinkSheet(editor: editor)
+        }
+        .sheet(isPresented: Binding(get: { mk.flattenSheet }, set: { mk.flattenSheet = $0 })) {
+            FlattenSheet(editor: editor)
+        }
     }
 }
 
@@ -120,8 +126,10 @@ struct SelectionChrome: View {
             let fw = v.bounds.width, fh = max(200, v.bounds.height - mk.keyboardOverlap)
             let primaries = mk.selected.filter(\.isPrimary).count
             let isWidget = mk.selectedPrimary?.isWidget ?? false
-            let canComment = primaries == 1 && !mk.annotationPopup && !isWidget
-            let canStyle = !isWidget && editor.mkSelectedPreset() != nil
+            let isLink = mk.selectedPrimary?.isLink ?? false
+            let locked = editor.mkSelectionLocked
+            let canComment = primaries == 1 && !mk.annotationPopup && !isWidget && !isLink
+            let canStyle = !isWidget && !isLink && !locked && editor.mkSelectedPreset() != nil
             let barW: CGFloat = 96 + (canComment ? 106 : 0) + (canStyle ? 118 : 0) + 86 + 36 + 92
             let x = min(max(8, r.midX - barW / 2), max(8, fw - barW - 8))
             let above = r.minY - 14 - 40 >= 8
@@ -145,10 +153,25 @@ struct SelectionChrome: View {
                         }.buttonStyle(.plain)
                     }
                     Menu {
-                        Button("Duplicate", systemImage: "plus.square.on.square") { editor.mkDuplicateSelection() }
-                        Button("Copy", systemImage: "doc.on.doc") { editor.mkCopySelection() }
+                        if !isLink {
+                            Button("Duplicate", systemImage: "plus.square.on.square") { editor.mkDuplicateSelection() }
+                            Button("Copy", systemImage: "doc.on.doc") { editor.mkCopySelection() }
+                        }
+                        if editor.mkRotatable != nil {
+                            Divider()
+                            Button("Rotate 90° right", systemImage: "rotate.right") { editor.mkRotateSelection(by: 90) }
+                            Button("Rotate 90° left", systemImage: "rotate.left") { editor.mkRotateSelection(by: -90) }
+                            if editor.mkRotatable is RedlineImage {
+                                Button("Flip horizontal", systemImage: "arrow.left.and.right.righttriangle.left.righttriangle.right") { editor.mkFlipSelection(horizontal: true) }
+                                Button("Flip vertical", systemImage: "arrow.up.and.down.righttriangle.up.righttriangle.down") { editor.mkFlipSelection(horizontal: false) }
+                            }
+                        }
+                        if !isWidget && !isLink {
+                            Divider()
+                            Button(locked ? "Unlock" : "Lock", systemImage: locked ? "lock.open" : "lock") { editor.mkToggleLock() }
+                        }
                     } label: {
-                        HStack(spacing: 5) { Image(systemName: "doc.on.doc").font(fnt(15, .medium)); Text("Copy").font(fnt(13, .semibold)) }
+                        HStack(spacing: 5) { Image(systemName: locked ? "lock.fill" : "ellipsis.circle").font(fnt(15, .medium)); Text(locked ? "Locked" : "More").font(fnt(13, .semibold)) }
                             .foregroundStyle(theme.ink1).frame(height: 40).contentShape(Rectangle())
                     }
                     Button { editor.mkDeleteSelection() } label: {
@@ -393,6 +416,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             if let hit = handleHit(at: s.location, page: page) {
                 switch hit {
                 case .resize: editor.mkBeginResize(at: p)
+                case .rotate: editor.mkBeginRotate(at: p)
                 case .leader(let leader, let idx): editor.mkBeginLeaderHandle(leader, index: idx)
                 }
                 captureScroll(true)
@@ -450,7 +474,10 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         setNeedsDisplay()
     }
 
-    private enum HandleHit { case resize, leader(PDFAnnotation, Int) }
+    private enum HandleHit { case resize, rotate, leader(PDFAnnotation, Int) }
+
+    /// Rotate handle: above the top centre of the selection (overlay space).
+    private func rotateHandlePoint(_ r: CGRect) -> CGPoint { CGPoint(x: r.midX, y: r.minY - 26 * unit) }
 
     /// The "has a comment" badge under a touch, if any.
     private func badgeHit(at loc: CGPoint, page: PDFPage) -> PDFAnnotation? {
@@ -486,6 +513,10 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             let u = unit
             let h = CGPoint(x: r.maxX + 8 * u, y: r.maxY + 8 * u)
             if hypot(loc.x - h.x, loc.y - h.y) <= 18 * u { return .resize }
+            if editor.mkRotatable != nil {
+                let rp = rotateHandlePoint(r)
+                if hypot(loc.x - rp.x, loc.y - rp.y) <= 18 * u { return .rotate }
+            }
         }
         return nil
     }
@@ -523,10 +554,15 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                 let pts = live.points.map { overlayPoint($0, on: live.page) }
                 let p0 = live.points.first ?? .zero, p1 = live.points.last ?? p0
                 let pageRect = CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y), width: abs(p1.x - p0.x), height: abs(p1.y - p0.y))
-                if pts.count >= 2, [Tool.rect, .redact, .ellipse, .cloud, .line, .arrow, .dblarrow, .callout, .distance, .calibrate].contains(live.tool) {
+                if pts.count >= 2, [Tool.rect, .redact, .link, .ellipse, .cloud, .line, .arrow, .dblarrow, .callout, .distance, .calibrate].contains(live.tool) {
                     switch live.tool {
                     case .rect, .redact:
                         cg.stroke(overlayRect(pageRect, on: live.page))
+                    case .link:
+                        cg.setLineDash(phase: 0, lengths: [4 * u, 3 * u]); cg.setLineWidth(1.5 * u)
+                        cg.setStrokeColor(accent.cgColor); cg.setFillColor(accent.withAlphaComponent(0.08).cgColor)
+                        let r = overlayRect(pageRect, on: live.page)
+                        cg.fill(r); cg.stroke(r)
                     case .ellipse:
                         cg.strokeEllipse(in: overlayRect(pageRect, on: live.page))
                     case .cloud:
@@ -538,9 +574,12 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                     case .line, .arrow, .dblarrow, .distance, .calibrate:
                         let a = overlayPoint(p0, on: live.page), b = overlayPoint(p1, on: live.page)
                         cg.move(to: a); cg.addLine(to: b); cg.strokePath()
-                        let head = max(10, live.width * 4) * z
-                        if live.tool == .arrow || live.tool == .dblarrow { strokeArrowHead(cg, tip: b, from: a, size: head) }
-                        if live.tool == .dblarrow { strokeArrowHead(cg, tip: a, from: b, size: head) }
+                        if live.tool == .line || live.tool == .arrow || live.tool == .dblarrow {
+                            let e = AnnotationFactory.endings(tool: live.tool, style: editor.style(for: live.tool))
+                            cg.setFillColor(live.color.cgColor)
+                            LineRenderer.ending(e.end.pdfStyle, at: b, from: a, width: live.width * z, in: cg)
+                            LineRenderer.ending(e.start.pdfStyle, at: a, from: b, width: live.width * z, in: cg)
+                        }
                         if live.tool == .distance || live.tool == .calibrate {
                             // end ticks + the live measurement
                             let ang = atan2(b.y - a.y, b.x - a.x), t = 6 * u
@@ -660,6 +699,20 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             cg.restoreGState()
         }
 
+        // Links show while the Link tool is active (they are invisible otherwise, like in any reader).
+        if editor.tool == .link {
+            cg.saveGState()
+            cg.setStrokeColor(accent.cgColor); cg.setLineWidth(1.5 * u); cg.setLineDash(phase: 0, lengths: [4 * u, 3 * u])
+            cg.setFillColor(accent.withAlphaComponent(0.08).cgColor)
+            for page in visiblePages(v) {
+                for a in page.annotations where a.isLink {
+                    let r = overlayRect(a.bounds, on: page)
+                    cg.fill(r); cg.stroke(r)
+                }
+            }
+            cg.restoreGState()
+        }
+
         // Comment badges on annotations that carry text or replies
         for page in visiblePages(v) {
             let replied = editor.mkRepliedParents(on: page)
@@ -673,9 +726,28 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             cg.saveGState()
             cg.setStrokeColor(accent.cgColor); cg.setLineWidth(2 * u)
             for a in mk.selected { cg.stroke(overlayRect(a.bounds, on: page).insetBy(dx: -3 * u, dy: -3 * u)) }
+            if editor.mkSelectionLocked, let b = editor.mkSelectionBounds {
+                let r = overlayRect(b, on: page)
+                let s = 16 * u
+                let box = CGRect(x: r.minX - 3 * u, y: r.minY - 3 * u - s - 2 * u, width: s + 6 * u, height: s + 2 * u)
+                cg.setFillColor(accent.cgColor)
+                cg.fill(CGRect(x: box.minX, y: box.minY, width: box.width, height: box.height))
+                if let glyph = UIImage(systemName: "lock.fill")?.withTintColor(.white, renderingMode: .alwaysOriginal) {
+                    glyph.draw(in: CGRect(x: box.minX + 3 * u, y: box.minY + 1 * u, width: s, height: s))
+                }
+            }
             if let b = editor.mkSelectionBounds, !editor.mkMovableSelection.isEmpty {
                 let r = overlayRect(b, on: page)
                 drawHandle(cg, at: CGPoint(x: r.maxX + 8 * u, y: r.maxY + 8 * u), accent: accent, u: u)
+                if editor.mkRotatable != nil {
+                    let rp = rotateHandlePoint(r)
+                    cg.setStrokeColor(accent.cgColor); cg.setLineWidth(1.5 * u)
+                    cg.move(to: CGPoint(x: r.midX, y: r.minY - 3 * u)); cg.addLine(to: CGPoint(x: rp.x, y: rp.y + 11 * u)); cg.strokePath()
+                    drawHandle(cg, at: rp, accent: accent, u: u)
+                    if let glyph = UIImage(systemName: "arrow.clockwise")?.withTintColor(accent, renderingMode: .alwaysOriginal) {
+                        glyph.draw(in: CGRect(x: rp.x - 6 * u, y: rp.y - 6 * u, width: 12 * u, height: 12 * u))
+                    }
+                }
                 if let box = mk.selected.first(where: { $0.redlineTool == .callout && $0.subtype == "FreeText" }), let leader = editor.mkLeader(for: box, on: page) {
                     let pts = editor.mkLeaderPoints(leader)
                     if pts.count >= 3 {
@@ -985,6 +1057,128 @@ struct SignaturePreview: View {
                 for q in path.dropFirst() { p.addLine(to: CGPoint(x: ox + CGFloat(q.x) * k, y: oy + CGFloat(q.y) * k)) }
                 ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: 1.6, lineCap: .round, lineJoin: .round))
             }
+        }
+    }
+}
+
+
+/// Link tool: where the drawn box should go.
+struct LinkSheet: View {
+    @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
+    var editor: WorkspaceModel
+    @State private var mode = "web"
+    @State private var address = ""
+    @State private var pageText = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Add link").font(titleFnt(20)).foregroundStyle(theme.ink1)
+            SegmentControl(options: [SegmentOption(value: "web", label: "Web address"), SegmentOption(value: "page", label: "Page in this document")],
+                           selection: $mode, fontSize: 12.5, vPad: 5, radius: 8, fill: true)
+            if mode == "web" {
+                FieldText(placeholder: "https://…", text: $address, height: 38, font: fnt(14))
+                    .textInputAutocapitalization(.never).keyboardType(.URL).autocorrectionDisabled()
+            } else {
+                HStack(spacing: 8) {
+                    FieldText(placeholder: "Page number", text: $pageText, height: 38, font: fnt(14)).keyboardType(.numberPad).frame(width: 140)
+                    Text("of \(editor.pageCount)").font(fnt(13)).foregroundStyle(theme.ink3)
+                }
+            }
+            HStack {
+                Spacer()
+                SecondaryButton(label: "Cancel") { editor.mk.linkPending = nil }
+                PrimaryButton(label: "Add link") {
+                    if mode == "web" {
+                        var s = address.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !s.contains("://") { s = "https://" + s }
+                        guard let u = URL(string: s), u.host != nil else { app.flash("That doesn't look like a web address"); return }
+                        editor.mkAddLink(url: u, pageIndex: nil)
+                    } else {
+                        guard let n = Int(pageText.trimmingCharacters(in: .whitespaces)), n >= 1, n <= editor.pageCount else { app.flash("Enter a page between 1 and \(editor.pageCount)"); return }
+                        editor.mkAddLink(url: nil, pageIndex: n - 1)
+                    }
+                }.disabled(mode == "web" ? address.trimmingCharacters(in: .whitespaces).isEmpty : pageText.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 440)
+        .background(theme.bg2)
+        .presentationDetents([.height(240)])
+    }
+}
+
+/// Flatten: what gets burned into the pages. Everything else stays an editable annotation.
+struct FlattenSheet: View {
+    @Environment(\.theme) private var theme
+    @Environment(AppModel.self) private var app
+    var editor: WorkspaceModel
+    @State private var mode = "all"
+    @State private var authors: Set<String> = []
+
+    var body: some View {
+        let all = editor.mkAuthors()
+        let selectedCount = editor.mk.selected.filter(\.isPrimary).count
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Flatten").font(titleFnt(20)).foregroundStyle(theme.ink1)
+            Text("Burned-in annotations become part of the page and can't be edited again.").font(fnt(13)).foregroundStyle(theme.ink3)
+            choice("all", "Everything", "All annotations on every page")
+            if selectedCount > 0 { choice("selected", "Only the selection", Formatting.plural(selectedCount, "annotation")) }
+            choice("authors", "By author", all.isEmpty ? "No authors found" : "Pick whose annotations to burn in")
+            if mode == "authors" {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(all, id: \.self) { name in
+                        Toggle(isOn: Binding(get: { authors.contains(name) }, set: { on in if on { authors.insert(name) } else { authors.remove(name) } })) {
+                            Text(name).font(fnt(13.5, .medium)).foregroundStyle(theme.ink1)
+                        }
+                        .tint(theme.accent)
+                    }
+                }
+                .padding(.leading, 28)
+            }
+            HStack(spacing: 10) {
+                Spacer()
+                SecondaryButton(label: "Cancel") { editor.mk.flattenSheet = false }
+                SecondaryButton(label: "Save to Files", symbol: "folder") { run(share: false) }
+                PrimaryButton(label: "Share", symbol: "square.and.arrow.up") { run(share: true) }
+            }
+            .padding(.top, 4)
+        }
+        .padding(24)
+        .frame(maxWidth: 480)
+        .background(theme.bg2)
+        .presentationDetents([.medium, .large])
+    }
+
+    private func choice(_ id: String, _ title: String, _ sub: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: mode == id ? "largecircle.fill.circle" : "circle").font(fnt(18)).foregroundStyle(mode == id ? theme.accent : theme.ink4)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(fnt(14, .semibold)).foregroundStyle(theme.ink1)
+                Text(sub).font(fnt(12)).foregroundStyle(theme.ink4)
+            }
+            Spacer()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { mode = id }
+    }
+
+    private func run(share: Bool) {
+        let scope: FlattenScope
+        switch mode {
+        case "selected": scope = .selected
+        case "authors":
+            guard !authors.isEmpty else { app.flash("Pick at least one author"); return }
+            scope = .authors(authors)
+        default: scope = .all
+        }
+        guard let data = editor.mkFlattenedData(scope: scope) else { app.flash("Export failed"); return }
+        let name = editor.doc.name.replacingOccurrences(of: ".pdf", with: "") + " — flattened.pdf"
+        editor.mk.flattenSheet = false
+        if share {
+            if let url = PDFExport.write(data, name: name) { editor.shareURL = url } else { app.flash("Export failed") }
+        } else {
+            app.flash(PDFExport.write(data, name: name, directory: AppModel.exportsDirectory) != nil ? "Saved to Files › Redline › Exports" : "Export failed")
         }
     }
 }

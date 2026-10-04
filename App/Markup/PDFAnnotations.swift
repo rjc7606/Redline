@@ -128,6 +128,13 @@ enum AnnotationFactory {
         if !contents.isEmpty { a.contents = contents }
     }
 
+    /// The endings a line / arrow gets: the preset's choice, else the tool's default.
+    static func endings(tool: Tool, style: StylePreset) -> (start: LineEnding, end: LineEnding) {
+        let dStart: LineEnding = tool == .dblarrow ? .open : .plain
+        let dEnd: LineEnding = (tool == .arrow || tool == .dblarrow) ? .open : .plain
+        return (style.lineStart ?? dStart, style.lineEnd ?? dEnd)
+    }
+
     /// Bounds enclosing points with a margin for the stroke width.
     static func bounds(for pts: [CGPoint], inset: CGFloat) -> CGRect {
         guard let f = pts.first else { return .zero }
@@ -291,8 +298,9 @@ enum AnnotationFactory {
         a.setValue(NSString(string: (style.lineStyle ?? .solid).rawValue), forAnnotationKey: .redlineLineStyle)
         a.startPoint = CGPoint(x: p0.x - b.minX, y: p0.y - b.minY)
         a.endPoint = CGPoint(x: p1.x - b.minX, y: p1.y - b.minY)
-        if tool == .arrow || tool == .dblarrow { a.endLineStyle = .openArrow }
-        if tool == .dblarrow { a.startLineStyle = .openArrow }
+        let e = endings(tool: tool, style: style)
+        a.startLineStyle = e.start.pdfStyle
+        a.endLineStyle = e.end.pdfStyle
         if let op = style.opacity, op < 1 { a.opacityValue = op }
         stamp(a, tool: tool, author: author)
         return a
@@ -354,9 +362,10 @@ enum AnnotationFactory {
     /// A detached copy of an annotation (not on any page): same look and keys, a fresh Redline id, no replies,
     /// page or appearance references, so it can be added to any page of any document. Group links are rebuilt by
     /// `cloneGroup`.
-    static func clone(_ a: PDFAnnotation) -> PDFAnnotation? {
+    static func clone(_ a: PDFAnnotation, keepAppearance: Bool = false) -> PDFAnnotation? {
         var props: [AnyHashable: Any] = [:]
-        let dropped: Set<String> = ["/P", "/Popup", "/IRT", "/RT", "/AP", "/AS", "/RedlineID", "/RedlineGroup", "/Parent", "/Kids", "/StructParent", "/NM"]
+        var dropped: Set<String> = ["/P", "/Popup", "/IRT", "/RT", "/AP", "/AS", "/RedlineID", "/RedlineGroup", "/Parent", "/Kids", "/StructParent", "/NM"]
+        if keepAppearance { dropped.remove("/AP"); dropped.remove("/AS") }
         for (k, v) in a.annotationKeyValues {
             let key = (k as? String) ?? (k as? PDFAnnotationKey)?.rawValue ?? ""
             if dropped.contains(key) || dropped.contains("/" + key) { continue }
@@ -409,10 +418,10 @@ enum AnnotationFactory {
     }
 
     /// Clones a set of annotations, keeping their groups (callout box + leader, outline + fill, line + label).
-    static func cloneGroup(_ annots: [PDFAnnotation]) -> [PDFAnnotation] {
+    static func cloneGroup(_ annots: [PDFAnnotation], keepAppearance: Bool = false) -> [PDFAnnotation] {
         var map: [ObjectIdentifier: PDFAnnotation] = [:]
         var out: [PDFAnnotation] = []
-        for a in annots { if let c = clone(a) { map[ObjectIdentifier(a)] = c; out.append(c) } }
+        for a in annots { if let c = clone(a, keepAppearance: keepAppearance) { map[ObjectIdentifier(a)] = c; out.append(c) } }
         var gids: [String: String] = [:]
         for a in annots {
             guard let c = map[ObjectIdentifier(a)] else { continue }
@@ -587,6 +596,10 @@ struct AnnotationSnapshot {
     var vertices: [CGPoint]?
     /// The appearance stream at snapshot time (restored on undo so a foreign annotation keeps its original look).
     var appearance: Any?
+    var rotation: CGFloat = 0
+    var flipH = false
+    var flipV = false
+    var flags: Any?
 
     @MainActor
     init(_ a: PDFAnnotation) {
@@ -600,6 +613,8 @@ struct AnnotationSnapshot {
         iconType = a.subtype == "Text" ? a.iconType : nil
         vertices = a.subtype == "Polygon" ? a.polygonVertices : nil
         appearance = a.value(forAnnotationKey: .appearanceDictionary)
+        rotation = a.rotationDegrees; flipH = a.flipH; flipV = a.flipV
+        flags = a.value(forAnnotationKey: .flags)
     }
 
     @MainActor
@@ -622,6 +637,8 @@ struct AnnotationSnapshot {
         if let quads { a.quadrilateralPoints = quads }
         if let iconType { a.iconType = iconType }
         if let vertices { a.polygonVertices = vertices }
+        a.rotationDegrees = rotation; a.flipH = flipH; a.flipV = flipV
+        if let flags { a.setValue(flags, forAnnotationKey: .flags) } else { a.removeValue(forAnnotationKey: .flags) }
         if let appearance { a.setValue(appearance, forAnnotationKey: .appearanceDictionary) } else { a.dropAppearance() }
     }
 }
@@ -633,4 +650,20 @@ indirect enum PDFCommand {
     case change(annots: [(PDFAnnotation, AnnotationSnapshot)])
     /// Several edits that undo and redo as one step (an eraser drag that cuts some strokes and removes others).
     case group([PDFCommand])
+}
+
+
+extension LineEnding {
+    var pdfStyle: PDFLineStyle {
+        switch self { case .plain: .none; case .open: .openArrow; case .closed: .closedArrow; case .dot: .circle; case .square: .square }
+    }
+    init(_ s: PDFLineStyle) {
+        switch s {
+        case .openArrow: self = .open
+        case .closedArrow: self = .closed
+        case .circle: self = .dot
+        case .square, .diamond: self = .square
+        default: self = .plain
+        }
+    }
 }

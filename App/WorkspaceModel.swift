@@ -26,6 +26,8 @@ enum MarkupTab: Hashable {
 enum WorkspacePopover: Equatable { case tray, stamps, export }
 enum JournalView: String, CaseIterable { case book, calendar }
 enum AuthorFilter: String, CaseIterable { case all = "All", mine = "Mine", others = "Others" }
+enum CommentSort: String, CaseIterable { case page = "Page order", newest = "Newest first", author = "By author" }
+enum CommentShow: String, CaseIterable { case all = "All", open = "Open", resolved = "Resolved" }
 
 struct CommentItem: Identifiable {
     var comment: Comment
@@ -50,6 +52,8 @@ enum MkDrag {
     case move(start: CGPoint, snaps: [(PDFAnnotation, AnnotationSnapshot)], boxOnly: Bool)
     case resize(center: CGPoint, d0: CGFloat, snaps: [(PDFAnnotation, AnnotationSnapshot)])
     case handle(leader: PDFAnnotation, index: Int, snap: AnnotationSnapshot)
+    /// Rotate handle on a text box / stamp / image: angle at touch-down and the rotation it started from.
+    case rotate(a: PDFAnnotation, center: CGPoint, a0: CGFloat, r0: CGFloat, snap: AnnotationSnapshot)
     case erase
     case rulerMove(start: CGPoint, base: CGPoint)
     case rulerRotate(a0: CGFloat, r0: Double)
@@ -162,6 +166,8 @@ final class WorkspaceModel {
 
     // comments
     var authorFilter: AuthorFilter = .all
+    var commentSort: CommentSort = .page
+    var commentShow: CommentShow = .all
     var replyDraft = ""
 
     /// Set by the view from its width.

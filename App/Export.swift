@@ -20,6 +20,8 @@ enum PDFExporter {
         case .saveToFiles:
             let data = pdf(editor: editor, pages: Array(doc.pages.indices), mode: .asSeen, report: doc.type == .markup)
             return write(data, name: "\(base).pdf", directory: AppModel.exportsDirectory)
+        case .commentSummary, .commentCSV:
+            return nil
         case .taggedPDF:
             guard let tag = editor.tagFilter else { return nil }
             let pages = doc.pages.indices.filter { doc.pages[$0].tags.contains(tag) }

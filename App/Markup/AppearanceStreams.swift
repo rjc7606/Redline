@@ -14,6 +14,8 @@ extension PDFAnnotationKey {
     static let redlineSized = PDFAnnotationKey(rawValue: "/RedlineSized")
     /// Tilt in degrees (stamps sit at -2°, like their preview).
     static let redlineRotation = PDFAnnotationKey(rawValue: "/RedlineRotation")
+    static let redlineFlipH = PDFAnnotationKey(rawValue: "/RedlineFlipH")
+    static let redlineFlipV = PDFAnnotationKey(rawValue: "/RedlineFlipV")
     /// Callout leader: the side of the box the user put the elbow on (L R T B); absent = face the tip.
     static let redlineSide = PDFAnnotationKey(rawValue: "/RedlineSide")
     /// Standard PDF polygon vertices (x y x y …, page space).
@@ -61,6 +63,25 @@ extension PDFAnnotation {
     var rotationDegrees: CGFloat {
         get { CGFloat((value(forAnnotationKey: .redlineRotation) as? NSNumber)?.doubleValue ?? 0) }
         set { if newValue == 0 { removeValue(forAnnotationKey: .redlineRotation) } else { setValue(NSNumber(value: Double(newValue)), forAnnotationKey: .redlineRotation) } }
+    }
+    /// Image stamps: mirrored horizontally / vertically.
+    var flipH: Bool {
+        get { (value(forAnnotationKey: .redlineFlipH) as? NSNumber)?.boolValue ?? false }
+        set { if newValue { setValue(NSNumber(value: true), forAnnotationKey: .redlineFlipH) } else { removeValue(forAnnotationKey: .redlineFlipH) } }
+    }
+    var flipV: Bool {
+        get { (value(forAnnotationKey: .redlineFlipV) as? NSNumber)?.boolValue ?? false }
+        set { if newValue { setValue(NSNumber(value: true), forAnnotationKey: .redlineFlipV) } else { removeValue(forAnnotationKey: .redlineFlipV) } }
+    }
+    /// The PDF /F "Locked" flag (bit 8): other readers honour it too.
+    var annotationFlags: Int { (value(forAnnotationKey: .flags) as? NSNumber)?.intValue ?? 4 }
+    var isLockedFlag: Bool {
+        get { annotationFlags & 128 != 0 }
+        set {
+            var f = annotationFlags
+            if newValue { f |= 128 } else { f &= ~128 }
+            setValue(NSNumber(value: f), forAnnotationKey: .flags)
+        }
     }
 
     var isRedlineTextBox: Bool { subtype == "FreeText" && redlineID != nil }
@@ -391,26 +412,59 @@ final class ImageStore: @unchecked Sendable {
     private var images: [String: UIImage] = [:]
     func image(for id: String?) -> UIImage? { id.flatMap { images[$0] } }
     func set(_ img: UIImage, for id: String) { images[id] = img }
+
+    /// Pixels for an image stamp: the session image, or — after a reload — its saved appearance rasterised. The
+    /// saved look already contains any rotation or flip, so those keys are reset to match the baked image.
+    @MainActor
+    func resolve(_ a: RedlineImage) -> UIImage? {
+        if let img = image(for: a.redlineID) { return img }
+        guard let id = a.redlineID, a.bounds.width > 1, a.bounds.height > 1 else { return nil }
+        let size = a.bounds.size
+        let fmt = UIGraphicsImageRendererFormat(); fmt.scale = 2
+        let img = UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+            let cg = ctx.cgContext
+            cg.translateBy(x: 0, y: size.height); cg.scaleBy(x: 1, y: -1)
+            cg.translateBy(x: -a.bounds.minX, y: -a.bounds.minY)
+            a.drawStored(in: cg)
+        }
+        a.rotationDegrees = 0; a.flipH = false; a.flipV = false
+        images[id] = img
+        return img
+    }
 }
 
 /// Image stamp: drawn from the in-session image when there is one, else from its appearance stream.
 final class RedlineImage: PDFAnnotation {
     override func draw(with box: PDFDisplayBox, in context: CGContext) {
         guard let img = ImageStore.shared.image(for: redlineID), let cg = img.cgImage else { super.draw(with: box, in: context); return }
-        context.saveGState()
-        context.interpolationQuality = .high
-        context.draw(cg, in: bounds)
-        context.restoreGState()
+        ImageStampRenderer.draw(cg, bounds: bounds, rotation: rotationDegrees, flipH: flipH, flipV: flipV, in: context)
     }
+    /// The saved appearance stream, as any reader shows it.
+    func drawStored(in cg: CGContext) { super.draw(with: .mediaBox, in: cg) }
 }
 
 enum ImageStampRenderer {
+    /// Draws the image inside `bounds` (page space, y up), tilted and mirrored about the centre.
+    static func draw(_ img: CGImage, bounds: CGRect, rotation: CGFloat, flipH: Bool, flipV: Bool, in cg: CGContext) {
+        let inner = TextBoxRenderer.innerSize(outer: bounds.size, rotation: rotation)
+        cg.saveGState()
+        cg.interpolationQuality = .high
+        cg.translateBy(x: bounds.midX, y: bounds.midY)
+        cg.rotate(by: -rotation * .pi / 180)   // positive = clockwise on screen
+        cg.scaleBy(x: flipH ? -1 : 1, y: flipV ? -1 : 1)
+        cg.draw(img, in: CGRect(x: -inner.width / 2, y: -inner.height / 2, width: inner.width, height: inner.height))
+        cg.restoreGState()
+    }
+
     static func appearancePDF(for a: PDFAnnotation) -> Data? {
-        guard let img = ImageStore.shared.image(for: a.redlineID) else { return nil }
+        guard let img = ImageStore.shared.image(for: a.redlineID), let cgImage = img.cgImage else { return nil }
         let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
         return UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
             c.beginPage()
-            img.draw(in: CGRect(origin: .zero, size: size))
+            let cg = c.cgContext
+            cg.translateBy(x: 0, y: size.height)
+            cg.scaleBy(x: 1, y: -1)
+            draw(cgImage, bounds: CGRect(origin: .zero, size: size), rotation: a.rotationDegrees, flipH: a.flipH, flipV: a.flipV, in: cg)
         }
     }
 }
@@ -490,17 +544,32 @@ enum LineRenderer {
         if let d = AnnotationFactory.dashLengths(of: a) { cg.setLineDash(phase: 0, lengths: d) }
         cg.move(to: p0); cg.addLine(to: p1); cg.strokePath()
         cg.setLineDash(phase: 0, lengths: [])
-        let size = max(10, w * 4)
-        func head(at tip: CGPoint, from: CGPoint) {
-            let ang = atan2(tip.y - from.y, tip.x - from.x)
-            cg.move(to: CGPoint(x: tip.x - size * cos(ang - 0.45), y: tip.y - size * sin(ang - 0.45)))
-            cg.addLine(to: tip)
-            cg.addLine(to: CGPoint(x: tip.x - size * cos(ang + 0.45), y: tip.y - size * sin(ang + 0.45)))
-            cg.strokePath()
-        }
-        if a.endLineStyle == .openArrow || a.endLineStyle == .closedArrow { head(at: p1, from: p0) }
-        if a.startLineStyle == .openArrow || a.startLineStyle == .closedArrow { head(at: p0, from: p1) }
+        cg.setFillColor(a.color.cgColor)
+        ending(a.endLineStyle, at: p1, from: p0, width: w, in: cg)
+        ending(a.startLineStyle, at: p0, from: p1, width: w, in: cg)
         cg.restoreGState()
+    }
+
+    /// One line ending at `tip`, pointing away from `from`. Stroke and fill colours are already set.
+    static func ending(_ style: PDFLineStyle, at tip: CGPoint, from: CGPoint, width w: CGFloat, in cg: CGContext) {
+        let size = max(10, w * 4)
+        let ang = atan2(tip.y - from.y, tip.x - from.x)
+        let l = CGPoint(x: tip.x - size * cos(ang - 0.45), y: tip.y - size * sin(ang - 0.45))
+        let r = CGPoint(x: tip.x - size * cos(ang + 0.45), y: tip.y - size * sin(ang + 0.45))
+        switch style {
+        case .openArrow:
+            cg.move(to: l); cg.addLine(to: tip); cg.addLine(to: r); cg.strokePath()
+        case .closedArrow:
+            cg.move(to: l); cg.addLine(to: tip); cg.addLine(to: r); cg.closePath(); cg.drawPath(using: .fillStroke)
+        case .circle:
+            let rad = max(3, w * 1.8)
+            cg.fillEllipse(in: CGRect(x: tip.x - rad, y: tip.y - rad, width: rad * 2, height: rad * 2))
+        case .square, .diamond:
+            let rad = max(3, w * 1.6)
+            cg.saveGState(); cg.translateBy(x: tip.x, y: tip.y); cg.rotate(by: ang)
+            cg.fill(CGRect(x: -rad, y: -rad, width: rad * 2, height: rad * 2)); cg.restoreGState()
+        default: break
+        }
     }
 
     static func appearancePDF(for a: PDFAnnotation) -> Data {

@@ -24,6 +24,9 @@ public struct StylePreset: Codable, Sendable, Equatable, Hashable {
     public var fontWeight: TextWeight?
     /// Revision cloud: "arcs" (default) or "straight" (a plain box outline you can select through).
     public var cloudStyle: String?
+    /// Lines and arrows: what each end looks like (nil = the tool's default: plain line, arrow head at the end…).
+    public var lineStart: LineEnding?
+    public var lineEnd: LineEnding?
 
     public init(color: String, width: Double, opacity: Double? = nil, lineStyle: LineStyle? = nil, pressure: Bool? = nil,
                 fill: String? = nil, fillPattern: FillPattern? = nil, fillOpacity: Double? = nil, background: String? = nil,
@@ -199,4 +202,13 @@ public enum Spectrum {
         }
         return g
     }()
+}
+
+
+/// How a line or arrow ends.
+public enum LineEnding: String, Codable, Sendable, CaseIterable, Hashable {
+    case plain, open, closed, dot, square
+    public var label: String {
+        switch self { case .plain: "None"; case .open: "Open"; case .closed: "Filled"; case .dot: "Dot"; case .square: "Square" }
+    }
 }

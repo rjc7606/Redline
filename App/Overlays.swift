@@ -171,6 +171,9 @@ enum ExportKind: Equatable {
     case taggedPDF
     /// Flattened PDF written to Documents/Exports (visible in the Files app).
     case saveToFiles
+    /// PDF markups: a PDF listing every comment, and the same as CSV.
+    case commentSummary
+    case commentCSV
 }
 
 enum LayerMode: Equatable { case asSeen, fullStrength, baseOnly }
@@ -180,7 +183,9 @@ extension WorkspaceModel {
         switch type {
         case .markup: [
             ExportOption(id: "annotated", label: "Share PDF", desc: "The PDF with its annotations — editable in any PDF app", symbol: "doc.text", kind: .pdf(.asSeen)),
-            ExportOption(id: "flat", label: "Share flattened PDF", desc: "Annotations burned into the pages", symbol: "doc.badge.gearshape", kind: .commentReport),
+            ExportOption(id: "flat", label: "Flatten…", desc: "Burn in everything, the selection, or chosen authors", symbol: "doc.badge.gearshape", kind: .commentReport),
+            ExportOption(id: "summary", label: "Comment summary (PDF)", desc: "Every comment with replies and status", symbol: "list.bullet.rectangle", kind: .commentSummary),
+            ExportOption(id: "csv", label: "Comments as CSV", desc: "For spreadsheets and trackers", symbol: "tablecells", kind: .commentCSV),
             ExportOption(id: "png", label: "Image of this page", desc: "PNG", symbol: "photo", kind: .png),
             ExportOption(id: "files", label: "Save flattened to Files", desc: "On My iPad › Redline › Exports", symbol: "folder", kind: .saveToFiles)
         ]
@@ -225,7 +230,8 @@ struct ExportMenu: View {
                         return
                     }
                     if editor.isPDF {
-                        let url: URL? = (o.kind == .commentReport) ? PDFExport.flattened(editor: editor) : PDFExport.run(o.kind, editor: editor)
+                        if o.kind == .commentReport { editor.mk.flattenSheet = true; return }
+                        let url: URL? = PDFExport.run(o.kind, editor: editor)
                         if let url { editor.shareURL = url } else { app.flash("Export failed") }
                         return
                     }

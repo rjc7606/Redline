@@ -194,7 +194,7 @@ public enum ToolCatalog {
 
         .edittext: ToolInfo(label: "Edit text", kind: .flash, symbol: "text.cursor", message: "Edit text — coming soon"),
         .image: ToolInfo(label: "Insert image — pick a photo, then tap the page", kind: .place, symbol: "photo.badge.plus"),
-        .link: ToolInfo(label: "Link", kind: .flash, symbol: "link", message: "Add link — coming soon"),
+        .link: ToolInfo(label: "Link — drag a box, then enter a web address or page", kind: .shape, symbol: "link"),
         .redact: ToolInfo(label: "Redact", kind: .shape, symbol: "eye.slash"),
         .rotatepg: ToolInfo(label: "Rotate page", kind: .pageAction, symbol: "rotate.right", pageAction: .rotate),
         .crop: ToolInfo(label: "Crop", kind: .flash, symbol: "crop", message: "Crop page — coming soon"),
