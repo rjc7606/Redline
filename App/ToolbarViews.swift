@@ -306,6 +306,9 @@ struct MarkupToolStrip: View {
             if !editor.app.clipboard.isEmpty {
                 BarButton(symbol: "doc.on.clipboard", label: "Paste") { editor.mkPaste() }
             }
+            if editor.mkPendingRedactions > 0 {
+                BarButton(symbol: "eye.slash.fill", label: "Apply redactions — remove the marked content for good") { editor.mk.redactConfirm = true }
+            }
             BarButton(symbol: "square.on.square.dashed", label: "Snap to annotations", active: editor.app.settings.snapEnabled) {
                 editor.app.settings.snapEnabled.toggle()
                 editor.app.flash(editor.app.settings.snapEnabled ? "Snapping on" : "Snapping off")

@@ -192,12 +192,12 @@ public enum ToolCatalog {
         .datestamp: ToolInfo(label: "Date stamp", kind: .stampPreset, symbol: "calendar.badge.checkmark", stampText: "RECEIVED", stampColor: "#FF3B30"),
         .initials: ToolInfo(label: "Initials", kind: .stampPreset, symbol: "textformat.abc", stampText: "T.M.", stampColor: "#007AFF"),
 
-        .edittext: ToolInfo(label: "Edit text", kind: .flash, symbol: "text.cursor", message: "Edit text — coming soon"),
+        .edittext: ToolInfo(label: "Edit text — tap a line of text to replace it", kind: .place, symbol: "text.cursor"),
         .image: ToolInfo(label: "Insert image — pick a photo, then tap the page", kind: .place, symbol: "photo.badge.plus"),
         .link: ToolInfo(label: "Link — drag a box, then enter a web address or page", kind: .shape, symbol: "link"),
         .redact: ToolInfo(label: "Redact", kind: .shape, symbol: "eye.slash"),
         .rotatepg: ToolInfo(label: "Rotate page", kind: .pageAction, symbol: "rotate.right", pageAction: .rotate),
-        .crop: ToolInfo(label: "Crop", kind: .flash, symbol: "crop", message: "Crop page — coming soon"),
+        .crop: ToolInfo(label: "Crop — drag the area of the page to keep", kind: .shape, symbol: "crop"),
 
         .ftext: ToolInfo(label: "Text input", kind: .form, symbol: "character.textbox", fieldType: .text),
         .farea: ToolInfo(label: "Text area", kind: .form, glyph: "M6 4.5h12a2.5 2.5 0 0 1 2.5 2.5v10a2.5 2.5 0 0 1-2.5 2.5H6a2.5 2.5 0 0 1-2.5-2.5V7A2.5 2.5 0 0 1 6 4.5z", glyph2: "M7 9h10M7 12.5h7M17.5 17l2-2", fieldType: .area),

@@ -162,4 +162,11 @@ swift test
 - Comments sidebar: sort (page / newest / author) and show (all / open / resolved) menu, "next unresolved" (⇧⌘U).
   Export has a comment summary PDF and a CSV.
 - Flatten… lets you burn in everything, only the selection, or chosen authors; the rest stay editable.
-- Edit text / crop currently show a "coming soon" toast.
+- Crop (Edit tab): drag the area to keep; the page's crop box is set, which every reader honours, and Organize
+  Pages has a reset button for cropped pages. Redline displays the crop box of every PDF (as other readers do).
+- Redact: black boxes are marks until you press Apply redactions in the tool bar. Applying rebuilds each affected
+  page as an image with the marked areas painted black, so the content underneath is gone from the file; other
+  annotations on those pages are kept, but their text is no longer selectable or searchable.
+- Edit text (Edit tab): tap a line of page text and a white patch covers it with an editable text box holding the
+  same words, grouped so they move together. The original text stays in the file underneath (use Redact to remove
+  it); the patch is white, so it suits white pages.

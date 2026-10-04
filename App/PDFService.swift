@@ -16,7 +16,8 @@ enum PDFDraw {
     static func content(of page: PDFPage, in cg: CGContext) {
         guard let ref = page.pageRef else { return }
         cg.saveGState()
-        cg.concatenate(page.transform(for: .mediaBox))
+        cg.concatenate(page.transform(for: .cropBox))
+        cg.clip(to: page.bounds(for: .cropBox))
         cg.drawPDFPage(ref)
         cg.restoreGState()
     }
@@ -31,9 +32,9 @@ enum PDFDraw {
     /// through PDFKit from their appearance streams, Redline's own through their drawing subclasses.
     static func annotations(of page: PDFPage, in cg: CGContext, include: (PDFAnnotation) -> Bool = { _ in true }) {
         cg.saveGState()
-        cg.concatenate(page.transform(for: .mediaBox))
+        cg.concatenate(page.transform(for: .cropBox))
         for a in page.annotations where a.shouldDisplay && !a.isPopup && !a.isReply && !a.isStateAnnotation && include(a) {
-            a.draw(with: .mediaBox, in: cg)
+            a.draw(with: .cropBox, in: cg)
         }
         cg.restoreGState()
     }
@@ -175,7 +176,7 @@ final class PDFService {
 
     /// Size of the page as displayed (rotation applied), in PDF points.
     nonisolated static func displaySize(_ page: PDFPage) -> CGSize {
-        let b = page.bounds(for: .mediaBox)
+        let b = page.bounds(for: .cropBox)
         return page.rotation % 180 == 0 ? b.size : CGSize(width: b.height, height: b.width)
     }
 
@@ -183,7 +184,7 @@ final class PDFService {
     nonisolated static func pageToDisplay(_ page: PDFPage) -> CGAffineTransform {
         let size = displaySize(page)
         let flip = CGAffineTransform(scaleX: 1, y: -1).concatenating(CGAffineTransform(translationX: 0, y: size.height))
-        return page.transform(for: .mediaBox).concatenating(flip)
+        return page.transform(for: .cropBox).concatenating(flip)
     }
 
     /// Logical canvas size (1000 wide) matching the page's aspect ratio.

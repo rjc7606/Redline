@@ -43,6 +43,15 @@ struct MarkupCanvas: View {
         .sheet(isPresented: Binding(get: { mk.flattenSheet }, set: { mk.flattenSheet = $0 })) {
             FlattenSheet(editor: editor)
         }
+        .sheet(isPresented: Binding(get: { mk.cropPending != nil }, set: { if !$0 { mk.cropPending = nil } })) {
+            CropSheet(editor: editor)
+        }
+        .alert("Apply \(Formatting.plural(editor.mkPendingRedactions, "redaction"))?", isPresented: Binding(get: { mk.redactConfirm }, set: { mk.redactConfirm = $0 })) {
+            Button("Apply", role: .destructive) { editor.mkApplyRedactions() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The marked content is removed from the file for good. Each affected page is rebuilt as an image, so its text can no longer be selected or searched. Other annotations on those pages are kept.")
+        }
     }
 }
 
@@ -554,10 +563,18 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                 let pts = live.points.map { overlayPoint($0, on: live.page) }
                 let p0 = live.points.first ?? .zero, p1 = live.points.last ?? p0
                 let pageRect = CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y), width: abs(p1.x - p0.x), height: abs(p1.y - p0.y))
-                if pts.count >= 2, [Tool.rect, .redact, .link, .ellipse, .cloud, .line, .arrow, .dblarrow, .callout, .distance, .calibrate].contains(live.tool) {
+                if pts.count >= 2, [Tool.rect, .redact, .link, .crop, .ellipse, .cloud, .line, .arrow, .dblarrow, .callout, .distance, .calibrate].contains(live.tool) {
                     switch live.tool {
                     case .rect, .redact:
                         cg.stroke(overlayRect(pageRect, on: live.page))
+                    case .crop:
+                        // Dim what would be cut away; the kept area stays clear.
+                        let keep = overlayRect(pageRect, on: live.page)
+                        let whole = overlayRect(live.page.bounds(for: .cropBox), on: live.page)
+                        cg.setFillColor(UIColor.black.withAlphaComponent(0.35).cgColor)
+                        cg.addRect(whole); cg.addRect(keep); cg.fillPath(using: .evenOdd)
+                        cg.setStrokeColor(UIColor.white.cgColor); cg.setLineWidth(1.5 * u); cg.setLineDash(phase: 0, lengths: [5 * u, 3 * u])
+                        cg.stroke(keep)
                     case .link:
                         cg.setLineDash(phase: 0, lengths: [4 * u, 3 * u]); cg.setLineWidth(1.5 * u)
                         cg.setStrokeColor(accent.cgColor); cg.setFillColor(accent.withAlphaComponent(0.08).cgColor)
@@ -1180,5 +1197,34 @@ struct FlattenSheet: View {
         } else {
             app.flash(PDFExport.write(data, name: name, directory: AppModel.exportsDirectory) != nil ? "Saved to Files › Redline › Exports" : "Export failed")
         }
+    }
+}
+
+
+/// Crop tool: confirm the area to keep.
+struct CropSheet: View {
+    @Environment(\.theme) private var theme
+    var editor: WorkspaceModel
+
+    var body: some View {
+        let pending = editor.mk.cropPending
+        let index = pending.flatMap { editor.mk.pdf?.index(for: $0.page) } ?? editor.pageIndex
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Crop page \(index + 1)").font(titleFnt(20)).foregroundStyle(theme.ink1)
+            Text("Every reader shows only the area you dragged. Nothing is removed from the file; Organize Pages can reset the crop later.")
+                .font(fnt(13)).foregroundStyle(theme.ink3)
+            HStack {
+                Spacer()
+                SecondaryButton(label: "Cancel") { editor.mk.cropPending = nil }
+                PrimaryButton(label: "Crop", symbol: "crop") {
+                    if let p = pending { editor.mkCropPage(p.page, to: p.rect) }
+                    editor.mk.cropPending = nil
+                }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 440)
+        .background(theme.bg2)
+        .presentationDetents([.height(200)])
     }
 }

@@ -440,7 +440,7 @@ final class RedlineImage: PDFAnnotation {
         ImageStampRenderer.draw(cg, bounds: bounds, rotation: rotationDegrees, flipH: flipH, flipV: flipV, in: context)
     }
     /// The saved appearance stream, as any reader shows it.
-    func drawStored(in cg: CGContext) { super.draw(with: .mediaBox, in: cg) }
+    func drawStored(in cg: CGContext) { super.draw(with: .cropBox, in: cg) }
 }
 
 enum ImageStampRenderer {

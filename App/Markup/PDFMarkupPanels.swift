@@ -500,7 +500,9 @@ struct PDFOrganizePages: View {
                 )
             Text("Page \(i + 1)").font(fnt(12, .semibold)).foregroundStyle(theme.ink3)
             if i == sel && dragging == nil {
-                OrganizeActionPill(rotate: { editor.mkRotatePage(i) }, duplicate: { editor.mkDuplicatePage(i) }, extract: { editor.mkExtractPage(i) }, delete: { editor.mkDeletePage(i); selected = nil })
+                OrganizeActionPill(rotate: { editor.mkRotatePage(i) }, duplicate: { editor.mkDuplicatePage(i) }, extract: { editor.mkExtractPage(i) },
+                                   uncrop: editor.mk.page(i).map(editor.mkIsCropped) == true ? { editor.mkResetCrop(i) } : nil,
+                                   delete: { editor.mkDeletePage(i); selected = nil })
             }
         }
     }
@@ -524,12 +526,14 @@ struct OrganizeActionPill: View {
     var rotate: () -> Void
     var duplicate: () -> Void
     var extract: (() -> Void)? = nil
+    var uncrop: (() -> Void)? = nil
     var delete: () -> Void
     var body: some View {
         HStack(spacing: 4) {
             btn("rotate.right", tint: theme.ink2, action: rotate)
             btn("doc.on.doc", tint: theme.ink2, action: duplicate)
             if let extract { btn("square.and.arrow.up", tint: theme.ink2, action: extract) }
+            if let uncrop { btn("crop", tint: theme.accent, action: uncrop) }
             btn("trash", tint: theme.danger, action: delete)
         }
         .padding(.horizontal, 4).frame(height: 36)

@@ -59,7 +59,7 @@ final class PDFStackView: UIScrollView, UIScrollViewDelegate {
 
     private func pageSignature() -> [String] {
         guard let doc = document else { return [] }
-        return (0..<doc.pageCount).compactMap { doc.page(at: $0) }.map { "\(ObjectIdentifier($0).hashValue):\($0.rotation)" }
+        return (0..<doc.pageCount).compactMap { doc.page(at: $0) }.map { "\(ObjectIdentifier($0).hashValue):\($0.rotation):\($0.bounds(for: .cropBox))" }
     }
 
     /// Rebuilds the tiles if pages were added, removed, reordered or rotated.

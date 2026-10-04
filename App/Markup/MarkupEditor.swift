@@ -130,6 +130,11 @@ final class MarkupState {
     var linkPending: (page: PDFPage, rect: CGRect)? = nil
     /// Flatten sheet (what to burn in).
     var flattenSheet = false
+    /// Crop tool: the area was drawn; waiting for confirmation.
+    var cropPending: (page: PDFPage, rect: CGRect)? = nil
+    /// Apply-redactions confirmation.
+    var redactConfirm = false
+    @ObservationIgnored var redactionCountCache: (tick: Int, count: Int)? = nil
 
     var selectedPrimary: PDFAnnotation? { selected.first { $0.isPrimary } ?? selected.first }
     var pageCount: Int { pdf?.pageCount ?? 0 }
@@ -845,6 +850,93 @@ extension WorkspaceModel {
         pageIndex = to
         mkMarkDirty()
     }
+    // MARK: crop
+
+    func mkIsCropped(_ page: PDFPage) -> Bool { page.bounds(for: .cropBox) != page.bounds(for: .mediaBox) }
+    /// Crops the page to `rect` (page space). Readers show the crop box; nothing is removed.
+    func mkCropPage(_ page: PDFPage, to rect: CGRect) {
+        let r = rect.intersection(page.bounds(for: .cropBox))
+        guard r.width > 20, r.height > 20 else { app.flash("Drag a larger area to keep"); return }
+        mkCommitTextEdit(); mkClearSelection()
+        page.setBounds(r, for: .cropBox)
+        mk.undoStack.removeAll(); mk.redoStack.removeAll()
+        mk.pdfView?.syncPages()
+        mkMarkDirty()
+        app.flash("Page cropped — Organize Pages can reset it")
+    }
+    func mkResetCrop(_ i: Int) {
+        guard let page = mk.page(i), mkIsCropped(page) else { return }
+        page.setBounds(page.bounds(for: .mediaBox), for: .cropBox)
+        mk.undoStack.removeAll(); mk.redoStack.removeAll()
+        mk.pdfView?.syncPages()
+        mkMarkDirty()
+        app.flash("Crop reset")
+    }
+
+    // MARK: redaction
+
+    /// Redaction marks (black boxes) not yet applied.
+    var mkPendingRedactions: Int {
+        if let c = mk.redactionCountCache, c.tick == mk.renderTick { return c.count }
+        guard let pdf = mk.pdf else { return 0 }
+        var n = 0
+        for i in 0..<pdf.pageCount { n += (pdf.page(at: i)?.annotations ?? []).filter(mkIsRedactionMark).count }
+        mk.redactionCountCache = (mk.renderTick, n)
+        return n
+    }
+    private func mkIsRedactionMark(_ a: PDFAnnotation) -> Bool { a.subtype == "Square" && a.redlineTool == .redact }
+
+    /// Removes the content under every redaction mark for good: each affected page is re-rendered as an image with
+    /// the marked areas painted black, so the text and graphics underneath are no longer in the file. Other
+    /// annotations on those pages are kept.
+    func mkApplyRedactions() {
+        guard let pdf = mk.pdf else { return }
+        mkCommitTextEdit(); mkClearSelection()
+        var done = 0
+        for i in 0..<pdf.pageCount {
+            guard let page = pdf.page(at: i) else { continue }
+            let marks = page.annotations.filter(mkIsRedactionMark)
+            guard !marks.isEmpty else { continue }
+            let crop = page.bounds(for: .cropBox)
+            let size = crop.size
+            let scale: CGFloat = max(1, min(3, 4000 / max(size.width, size.height)))
+            let fmt = UIGraphicsImageRendererFormat(); fmt.scale = scale; fmt.opaque = true
+            let img = UIGraphicsImageRenderer(size: size, format: fmt).image { ctx in
+                let cg = ctx.cgContext
+                cg.setFillColor(UIColor.white.cgColor); cg.fill(CGRect(origin: .zero, size: size))
+                cg.saveGState()
+                cg.translateBy(x: 0, y: size.height); cg.scaleBy(x: 1, y: -1)   // page space (unrotated), crop origin at 0,0
+                cg.translateBy(x: -crop.minX, y: -crop.minY)
+                if let ref = page.pageRef { cg.clip(to: crop); cg.drawPDFPage(ref) }
+                cg.setFillColor(UIColor.black.cgColor)
+                for m in marks { cg.fill(m.bounds) }
+                cg.restoreGState()
+            }
+            let data = UIGraphicsPDFRenderer(bounds: CGRect(origin: .zero, size: size)).pdfData { c in
+                c.beginPage()
+                img.draw(in: CGRect(origin: .zero, size: size))
+            }
+            guard let fresh = PDFDocument(data: data), let newPage = fresh.page(at: 0) else { continue }
+            newPage.rotation = page.rotation
+            let keep = page.annotations.filter { a in
+                if a.isPopup || mkIsRedactionMark(a) { return false }
+                if let root = a.value(forAnnotationKey: .inReplyTo) as? PDFAnnotation, mkIsRedactionMark(root) { return false }
+                return true
+            }
+            for c in AnnotationFactory.cloneGroup(keep, keepAppearance: true) {
+                if crop.origin != .zero { AnnotationFactory.translate(c, dx: -crop.minX, dy: -crop.minY); if c.redlineID != nil { c.dropAppearance() } }
+                newPage.addAnnotation(c)
+            }
+            pdf.removePage(at: i)
+            pdf.insert(newPage, at: i)
+            done += 1
+        }
+        mk.undoStack.removeAll(); mk.redoStack.removeAll()
+        mk.pdfView?.syncPages()
+        mkMarkDirty()
+        app.flash(done == 0 ? "No redactions to apply" : "Redactions applied — \(Formatting.plural(done, "page")) now an image")
+    }
+
     func mkInsertBlankPage(after i: Int) {
         guard let pdf = mk.pdf else { return }
         let ref = mk.page(min(i, pdf.pageCount - 1))
@@ -1399,6 +1491,10 @@ extension WorkspaceModel {
             case .link:
                 mk.linkPending = (page: page, rect: rect)
                 return
+            case .crop:
+                guard rect.width > 20, rect.height > 20 else { app.flash("Drag a larger area to keep"); return }
+                mk.cropPending = (page: page, rect: rect)
+                return
             case .line, .arrow, .dblarrow: annots = [AnnotationFactory.line(from: a, to: b, tool: live.tool, style: st, author: author)]
             case .distance:
                 let line = AnnotationFactory.line(from: a, to: b, tool: .distance, style: st, author: author)
@@ -1449,6 +1545,24 @@ extension WorkspaceModel {
                 mkPerform(.add(page: page, annots: [a]))
                 mkSelect(a, on: page)
                 mk.pendingImage = nil
+            } else if tool == .edittext {
+                // Replace a line of page text: a white patch covers the original, a text box with the same words sits on top.
+                guard let sel = page.selectionForLine(at: p), let raw = sel.string,
+                      !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { app.flash("No text there — tap a line of text"); return }
+                let lb = sel.bounds(for: page)
+                var patch = StylePreset(color: "#FFFFFF", width: 0, opacity: 1)
+                patch.fill = "#FFFFFF"; patch.fillPattern = .solid; patch.fillOpacity = 1
+                let cover = AnnotationFactory.shape(rect: lb.insetBy(dx: -1.5, dy: -1.5), tool: .rect, style: patch, author: author)
+                var ts = style(for: .textbox)
+                ts.color = "#000000"; ts.background = nil; ts.backgroundOpacity = 0; ts.borderWidth = 0
+                let fontSize = max(6, lb.height * 0.78)
+                let box = AnnotationFactory.freeText(rect: CGRect(x: lb.minX - 3, y: lb.minY - 3, width: lb.width + 24, height: lb.height + 6),
+                                                     text: raw.trimmingCharacters(in: .newlines), tool: .edittext, style: ts, author: author, fontSize: fontSize)
+                AnnotationFactory.group(cover, under: box)
+                mkPerform(.add(page: page, annots: [cover, box]))
+                mk.selected = [box, cover]
+                mkFitTextBox(box, text: box.contents ?? "")
+                mkBeginTextEdit(box, page: page, isNew: false)
             } else if tool == .signature {
                 guard let sig = app.settings.signatures?.first else { mk.signaturePadOn = true; return }
                 let a = AnnotationFactory.signature(sig, at: p, width: 180, style: st, author: author)

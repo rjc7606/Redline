@@ -274,6 +274,22 @@ enum AnnotationFactory {
         return a
     }
 
+    /// Makes `child` a group member of `root` (same /RedlineGroup, IRT with RT /Group): selected, moved and deleted together.
+    static func group(_ child: PDFAnnotation, under root: PDFAnnotation) {
+        var gid = root.value(forAnnotationKey: .redlineGroup) as? String
+        if gid == nil { gid = IDGen.make(); root.setValue(NSString(string: gid!), forAnnotationKey: .redlineGroup) }
+        child.setValue(NSString(string: gid!), forAnnotationKey: .redlineGroup)
+        child.setValue(root, forAnnotationKey: .inReplyTo)
+        child.setValue(NSString(string: "/Group"), forAnnotationKey: .replyType)
+    }
+
+    /// Moves an annotation's geometry by an offset (bounds, ink paths, polygon vertices; line points are relative).
+    static func translate(_ a: PDFAnnotation, dx: CGFloat, dy: CGFloat) {
+        a.bounds = a.bounds.offsetBy(dx: dx, dy: dy)
+        if a.subtype == "Ink" { setInkPaths(a, inkPaths(a).map { $0.map { CGPoint(x: $0.x + dx, y: $0.y + dy) } }) }
+        if a.subtype == "Polygon" { a.polygonVertices = a.polygonVertices.map { CGPoint(x: $0.x + dx, y: $0.y + dy) } }
+    }
+
     static func redaction(rect: CGRect, author: String) -> PDFAnnotation {
         let a = PDFAnnotation(bounds: rect, forType: .square, withProperties: nil)
         a.color = .black
