@@ -175,6 +175,11 @@ struct TopBar<Center: View>: View {
             if editor.type != .markup {
                 BarButton(symbol: "ruler", label: "Ruler", active: editor.ruler.on) { editor.toggleRuler() }
             }
+            if editor.isPDF {
+                BarButton(symbol: "magnifyingglass", label: "Find", active: editor.mk.searchOpen) {
+                    if editor.mk.searchOpen { editor.mkCloseSearch() } else { editor.mk.searchOpen = true }
+                }
+            }
             BarButton(symbol: "square.and.arrow.up", label: "Share", active: editor.popover == .export, filledWhenActive: true) {
                 editor.popover = editor.popover == .export ? nil : .export
             }

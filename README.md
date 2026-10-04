@@ -141,5 +141,8 @@ swift test
   with the tip fixed (a side you chose is kept while the tip is still out on that side, otherwise the elbow faces the
   tip), dragging the leader moves the whole callout, and the tip handle re-aims the arrow. Polylines are placed point by point: tap to add a vertex, tap the last one to finish, tap the first
   to close.
-- Measure tools, edit text / insert image / link / crop and append/extract pages currently show a "coming soon"
-  toast, matching the prototype's preview-only behaviour.
+- Measure tools: Distance (drag; ticks and the live length), Perimeter and Area (tap the corners; running
+  totals), each committed with a grouped label that moves with it, and Calibrate (drag along a known length, enter
+  what it is in feet, inches, metres or millimetres) which sets the document's scale; uncalibrated documents measure
+  in the sheet's own inches. Find (magnifier in the top bar) searches the PDF text and highlights every hit.
+- Edit text / insert image / link / crop and append/extract pages currently show a "coming soon" toast.

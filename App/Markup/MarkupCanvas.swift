@@ -23,6 +23,77 @@ struct MarkupCanvas: View {
         .overlay(alignment: .topLeading) {
             if !mk.selected.isEmpty && !editor.organizeOpen { SelectionChrome(editor: editor) }
         }
+        .overlay(alignment: .top) {
+            if mk.searchOpen { PDFSearchBar(editor: editor).padding(.top, 10) }
+        }
+        .sheet(isPresented: Binding(get: { mk.calibratePending != nil }, set: { if !$0 { mk.calibratePending = nil } })) {
+            CalibrateSheet(editor: editor)
+        }
+    }
+}
+
+/// Find text in the PDF: field · "n of m" · previous · next · close. Hits are highlighted on the page.
+struct PDFSearchBar: View {
+    @Environment(\.theme) private var theme
+    var editor: WorkspaceModel
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let mk = editor.mk
+        let _ = mk.renderTick
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").font(fnt(14, .semibold)).foregroundStyle(theme.ink4)
+            TextField("Find in document", text: Binding(get: { mk.searchQuery }, set: { editor.mkSearch($0) }))
+                .font(fnt(14)).textFieldStyle(.plain).foregroundStyle(theme.ink1)
+                .focused($focused)
+                .onSubmit { editor.mkSearchStep(1) }
+                .frame(width: 220)
+            Text(mk.searchHits.isEmpty ? (mk.searchQuery.isEmpty ? "" : "No matches") : "\(mk.searchIndex + 1) of \(mk.searchHits.count)")
+                .font(fnt(12, .medium)).monospacedDigit().foregroundStyle(theme.ink4).frame(minWidth: 60)
+            Button { editor.mkSearchStep(-1) } label: { Image(systemName: "chevron.up").font(fnt(13, .bold)).foregroundStyle(theme.ink2).frame(width: 28, height: 28) }.buttonStyle(.plain).disabled(mk.searchHits.isEmpty)
+            Button { editor.mkSearchStep(1) } label: { Image(systemName: "chevron.down").font(fnt(13, .bold)).foregroundStyle(theme.ink2).frame(width: 28, height: 28) }.buttonStyle(.plain).disabled(mk.searchHits.isEmpty)
+            Button { editor.mkCloseSearch() } label: { Image(systemName: "xmark").font(fnt(12, .bold)).foregroundStyle(theme.ink3).frame(width: 28, height: 28).background(Circle().fill(theme.hov)) }.buttonStyle(.plain)
+        }
+        .padding(.horizontal, 12).frame(height: 44)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(theme.popSolid)
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(theme.line, lineWidth: 1))
+            .popShadow(theme))
+        .onAppear { focused = true }
+        .popIn()
+    }
+}
+
+/// After a calibration line: what real length it represents.
+struct CalibrateSheet: View {
+    @Environment(\.theme) private var theme
+    var editor: WorkspaceModel
+    @State private var value = ""
+    @State private var unit: MeasureUnit = .feet
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let points = editor.mk.calibratePending ?? 0
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Calibrate scale").font(titleFnt(20)).foregroundStyle(theme.ink1)
+            Text("The line you drew is \(String(format: "%.1f", points)) points on the page. How long is it really?").font(fnt(14)).foregroundStyle(theme.ink3)
+            HStack(spacing: 10) {
+                FieldText(placeholder: "Length", text: $value, height: 40, font: fnt(16)).keyboardType(.decimalPad).focused($focused).frame(width: 140)
+                SegmentControl(options: MeasureUnit.allCases.map { SegmentOption(value: $0, label: $0.label) }, selection: $unit, fontSize: 12.5, vPad: 7)
+            }
+            Text("Measurements in this document will use this scale. Draw along a dimension or a scale bar for the best result.").font(fnt(12)).foregroundStyle(theme.ink4)
+            HStack {
+                Spacer()
+                SecondaryButton(label: "Cancel") { editor.mk.calibratePending = nil }
+                PrimaryButton(label: "Set scale") {
+                    if let v = Double(value.replacingOccurrences(of: ",", with: ".")) { editor.mkApplyCalibration(points: points, value: v, unit: unit) }
+                }.disabled(Double(value.replacingOccurrences(of: ",", with: ".")) == nil)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 480)
+        .background(theme.bg2)
+        .presentationDetents([.medium])
+        .onAppear { unit = editor.mkMeasure.unit; focused = true }
     }
 }
 
@@ -437,7 +508,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                 let pts = live.points.map { overlayPoint($0, on: live.page) }
                 let p0 = live.points.first ?? .zero, p1 = live.points.last ?? p0
                 let pageRect = CGRect(x: min(p0.x, p1.x), y: min(p0.y, p1.y), width: abs(p1.x - p0.x), height: abs(p1.y - p0.y))
-                if pts.count >= 2, [Tool.rect, .redact, .ellipse, .cloud, .line, .arrow, .dblarrow, .callout].contains(live.tool) {
+                if pts.count >= 2, [Tool.rect, .redact, .ellipse, .cloud, .line, .arrow, .dblarrow, .callout, .distance, .calibrate].contains(live.tool) {
                     switch live.tool {
                     case .rect, .redact:
                         cg.stroke(overlayRect(pageRect, on: live.page))
@@ -449,12 +520,21 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
                             let straight = editor.style(for: .cloud).cloudStyle == "straight"
                             strokePolyline(cg, MarkupGeometry.cloudPoints(pageRect, straight: straight).map { overlayPoint($0, on: live.page) }, close: true)
                         }
-                    case .line, .arrow, .dblarrow:
+                    case .line, .arrow, .dblarrow, .distance, .calibrate:
                         let a = overlayPoint(p0, on: live.page), b = overlayPoint(p1, on: live.page)
                         cg.move(to: a); cg.addLine(to: b); cg.strokePath()
                         let head = max(10, live.width * 4) * z
                         if live.tool == .arrow || live.tool == .dblarrow { strokeArrowHead(cg, tip: b, from: a, size: head) }
                         if live.tool == .dblarrow { strokeArrowHead(cg, tip: a, from: b, size: head) }
+                        if live.tool == .distance || live.tool == .calibrate {
+                            // end ticks + the live measurement
+                            let ang = atan2(b.y - a.y, b.x - a.x), t = 6 * u
+                            for e in [a, b] { cg.move(to: CGPoint(x: e.x - t * sin(ang), y: e.y + t * cos(ang))); cg.addLine(to: CGPoint(x: e.x + t * sin(ang), y: e.y - t * cos(ang))) }
+                            cg.strokePath()
+                            let len = hypot(p1.x - p0.x, p1.y - p0.y)
+                            let text = live.tool == .calibrate ? "\(editor.mkMeasure.formatLength(points: Double(len))) · release to set" : editor.mkMeasure.formatLength(points: Double(len))
+                            drawPill(cg, text, at: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 16 * u), u: u)
+                        }
                     case .callout:
                         drawCalloutPreview(cg, tip: p0, at: p1, page: live.page, color: live.color, width: live.width, z: z)
                     default: break
@@ -530,6 +610,25 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             for p in pts { let r = CGRect(x: p.x - 4 * u, y: p.y - 4 * u, width: 8 * u, height: 8 * u); cg.fillEllipse(in: r); cg.strokeEllipse(in: r) }
             if let l = pts.last { cg.setStrokeColor(accent.cgColor); cg.strokeEllipse(in: CGRect(x: l.x - 9 * u, y: l.y - 9 * u, width: 18 * u, height: 18 * u)) }
             cg.restoreGState()
+            // running measurement for perimeter / area drafts
+            if mk.polyTool == .perimeter, let l = pts.last {
+                drawPill(cg, editor.mkMeasure.formatLength(points: Double(MarkupGeometry.pathLength(mk.polyPoints))), at: CGPoint(x: l.x, y: l.y - 18 * u), u: u)
+            } else if mk.polyTool == .area, mk.polyPoints.count >= 3 {
+                let c = overlayPoint(MarkupGeometry.centroid(mk.polyPoints), on: page)
+                drawPill(cg, editor.mkMeasure.formatArea(points2: Double(MarkupGeometry.polygonArea(mk.polyPoints))), at: c, u: u)
+            }
+        }
+
+        // Search hits: the current one in accent, the rest in yellow
+        if !mk.searchHits.isEmpty {
+            cg.saveGState()
+            for page in visiblePages(v) {
+                for (i, sel) in mk.searchHits.enumerated() where sel.pages.contains(page) {
+                    cg.setFillColor((i == mk.searchIndex ? accent.withAlphaComponent(0.4) : UIColor(red: 1, green: 0.85, blue: 0.1, alpha: 0.35)).cgColor)
+                    for line in sel.selectionsByLine() { cg.fill(overlayRect(line.bounds(for: page), on: page).insetBy(dx: -1 * u, dy: -1 * u)) }
+                }
+            }
+            cg.restoreGState()
         }
 
         // Marquee / lasso
@@ -578,6 +677,23 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
     }
 
     private func visiblePages(_ v: PDFStackView) -> [PDFPage] { v.visiblePages }
+
+    /// Small white pill with text, centred on `c` (screen-sized).
+    private func drawPill(_ cg: CGContext, _ text: String, at c: CGPoint, u: CGFloat) {
+        let font = UIFont.systemFont(ofSize: 12, weight: .semibold)
+        let size = (text as NSString).size(withAttributes: [.font: font])
+        cg.saveGState()
+        cg.translateBy(x: c.x, y: c.y); cg.scaleBy(x: u, y: u)
+        let pill = CGRect(x: -size.width / 2 - 8, y: -11, width: size.width + 16, height: 22)
+        cg.setShadow(offset: CGSize(width: 0, height: 1), blur: 2, color: UIColor.black.withAlphaComponent(0.2).cgColor)
+        cg.setFillColor(UIColor.white.cgColor)
+        cg.addPath(UIBezierPath(roundedRect: pill, cornerRadius: 11).cgPath); cg.fillPath()
+        cg.setShadow(offset: .zero, blur: 0, color: nil)
+        UIGraphicsPushContext(cg)
+        (text as NSString).draw(at: CGPoint(x: pill.minX + 8, y: pill.minY + 4), withAttributes: [.font: font, .foregroundColor: UIColor(white: 0.15, alpha: 1)])
+        UIGraphicsPopContext()
+        cg.restoreGState()
+    }
 
     private func strokePolyline(_ cg: CGContext, _ pts: [CGPoint], close: Bool) {
         guard let f = pts.first else { return }

@@ -106,7 +106,7 @@ public struct ToolTab: Sendable, Hashable, Identifiable {
 public enum ToolCatalog {
     public static let pens: Set<Tool> = [.pen, .fineliner, .felt, .marker]
     public static let closedShapes: Set<Tool> = [.rect, .ellipse, .cloud]
-    public static let lineLike: Set<Tool> = [.line, .arrow, .dblarrow, .polyline, .underline, .strike]
+    public static let lineLike: Set<Tool> = [.line, .arrow, .dblarrow, .polyline, .underline, .strike, .distance, .perimeter, .area, .calibrate]
 
     /// Markup workspace tabs (excluding the user-defined Favorites tabs).
     public static let markupTabs: [ToolTab] = [
@@ -176,10 +176,10 @@ public enum ToolCatalog {
         .check: ToolInfo(label: "Check mark", kind: .place, symbol: "checkmark", hasPresets: true),
         .xmark: ToolInfo(label: "X mark", kind: .place, symbol: "xmark", hasPresets: true),
         .cloud: ToolInfo(label: "Revision cloud", kind: .shape, glyph: "M6.5 15.5A4 4 0 0 1 7 7.6a5.2 5.2 0 0 1 10.2 1.3A3.4 3.4 0 0 1 16.8 15.5z", hasPresets: true),
-        .distance: ToolInfo(label: "Distance", kind: .flash, symbol: "ruler", message: "Measure tools are preview-only"),
-        .perimeter: ToolInfo(label: "Perimeter", kind: .flash, symbol: "point.topleft.down.to.point.bottomright.curvepath", message: "Measure tools are preview-only"),
-        .area: ToolInfo(label: "Area", kind: .flash, symbol: "square.dashed", message: "Measure tools are preview-only"),
-        .calibrate: ToolInfo(label: "Calibrate", kind: .flash, symbol: "arrow.left.and.right", message: "Measure tools are preview-only"),
+        .distance: ToolInfo(label: "Distance", kind: .shape, symbol: "ruler", hasPresets: true),
+        .perimeter: ToolInfo(label: "Perimeter — tap the corners, tap the last one to finish", kind: .shape, symbol: "point.topleft.down.to.point.bottomright.curvepath", hasPresets: true),
+        .area: ToolInfo(label: "Area — tap the corners, tap the first one to close", kind: .shape, symbol: "square.dashed", hasPresets: true),
+        .calibrate: ToolInfo(label: "Calibrate — draw along a known length", kind: .shape, symbol: "arrow.left.and.right"),
 
         .underline: ToolInfo(label: "Underline", kind: .textMarkup, symbol: "underline", hasPresets: true),
         .strike: ToolInfo(label: "Strikethrough", kind: .textMarkup, symbol: "strikethrough", hasPresets: true),

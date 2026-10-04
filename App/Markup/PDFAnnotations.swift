@@ -351,6 +351,23 @@ enum AnnotationFactory {
         return a
     }
 
+    /// Small measurement label (a text box grouped under the measured line so they move together).
+    static func measureLabel(_ text: String, near p: CGPoint, color: String, author: String, root: PDFAnnotation) -> PDFAnnotation {
+        var st = StylePreset(color: color, width: 1, background: "#FFFFFF", backgroundOpacity: 0.9, borderColor: color, borderOpacity: 1, borderWidth: 1)
+        st.fontWeight = .semibold
+        let font = RedlineFonts.page(size: 11, weight: .semibold)
+        let size = TextBoxRenderer.fittingSize(text: text, font: font)
+        let a = freeText(rect: CGRect(x: p.x + 6, y: p.y + 6, width: size.width, height: size.height), text: text, tool: .textbox, style: st, author: author, fontSize: 11)
+        a.cornerRadius = 4
+        a.alignment = .center
+        var gid = root.value(forAnnotationKey: .redlineGroup) as? String
+        if gid == nil { gid = IDGen.make(); root.setValue(NSString(string: gid!), forAnnotationKey: .redlineGroup) }
+        a.setValue(NSString(string: gid!), forAnnotationKey: .redlineGroup)
+        a.setValue(root, forAnnotationKey: .inReplyTo)
+        a.setValue(NSString(string: "/Group"), forAnnotationKey: .replyType)
+        return a
+    }
+
     static func note(at p: CGPoint, style: StylePreset, author: String) -> PDFAnnotation {
         let a = RedlineNote(bounds: CGRect(x: p.x - 12, y: p.y - 12, width: 24, height: 24), forType: .text, withProperties: nil)
         a.color = PDFColors.uiColor(style.color)

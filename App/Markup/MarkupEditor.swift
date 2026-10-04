@@ -102,6 +102,15 @@ final class MarkupState {
     var fieldEdit: PDFAnnotation? = nil
     /// Guides for the current snap (cleared when the touch ends).
     var snapGuides: [SnapGuide] = []
+    /// Which tap-to-place tool the polyline draft belongs to (polyline, perimeter or area).
+    var polyTool: Tool = .polyline
+    /// A calibration line was drawn: its length in points, waiting for the real length.
+    var calibratePending: CGFloat? = nil
+    /// Text search.
+    var searchOpen = false
+    var searchQuery = ""
+    var searchHits: [PDFSelection] = []
+    var searchIndex = 0
     /// Watches the open file for edits made by other apps.
     @ObservationIgnored var presenter: PDFFilePresenter? = nil
     /// Polyline being placed point by point.
@@ -728,7 +737,7 @@ extension WorkspaceModel {
                 mk.renderTick += 1
             }
         case .ink, .highlight, .textMarkup, .shape:
-            if tool == .polyline { mkDrag = .polyTap(start: p); return }
+            if tool == .polyline || tool == .perimeter || tool == .area { mk.polyTool = tool; mkDrag = .polyTap(start: p); return }
             let st = style(for: tool)
             var color = PDFColors.uiColor(st.color)
             if tool == .redact { color = .black }
@@ -1059,6 +1068,16 @@ extension WorkspaceModel {
             case .rect, .ellipse: annots = [AnnotationFactory.shape(rect: rect, tool: live.tool, style: st, author: author)]
             case .redact: annots = [AnnotationFactory.redaction(rect: rect, author: author)]
             case .line, .arrow, .dblarrow: annots = [AnnotationFactory.line(from: a, to: b, tool: live.tool, style: st, author: author)]
+            case .distance:
+                let line = AnnotationFactory.line(from: a, to: b, tool: .distance, style: st, author: author)
+                let text = mkMeasure.formatLength(points: Double(hypot(b.x - a.x, b.y - a.y)))
+                line.contents = text
+                line.setValue(NSString(string: "/LineDimension"), forAnnotationKey: .intent)
+                let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+                annots = [line, AnnotationFactory.measureLabel(text, near: mid, color: st.color, author: author, root: line)]
+            case .calibrate:
+                mk.calibratePending = hypot(b.x - a.x, b.y - a.y)
+                return
             case .cloud:
                 annots = [AnnotationFactory.ink(paths: [MarkupGeometry.cloudPoints(rect, straight: st.cloudStyle == "straight")], tool: live.tool, style: st, author: author)]
             case .callout:
@@ -1435,12 +1454,65 @@ extension WorkspaceModel {
 
     func mkFinishPolyline() {
         guard let page = mk.polyPage else { return }
-        let pts = mk.polyPoints
+        var pts = mk.polyPoints
+        let tool = mk.polyTool
         mk.polyPoints = []; mk.polyPage = nil
         mk.renderTick += 1
         guard pts.count >= 2 else { return }
-        mkPerform(.add(page: page, annots: [AnnotationFactory.ink(paths: [pts], tool: .polyline, style: style(for: .polyline), author: app.author)]))
+        let st = style(for: tool)
+        switch tool {
+        case .perimeter:
+            let line = AnnotationFactory.ink(paths: [pts], tool: tool, style: st, author: app.author)
+            let text = mkMeasure.formatLength(points: Double(MarkupGeometry.pathLength(pts)))
+            line.contents = text
+            let label = AnnotationFactory.measureLabel(text, near: pts[pts.count - 1], color: st.color, author: app.author, root: line)
+            mkPerform(.add(page: page, annots: [line, label]))
+        case .area:
+            guard pts.count >= 3 else { return }
+            if let f = pts.first, let l = pts.last, f != l { pts.append(f) }
+            let line = AnnotationFactory.ink(paths: [pts], tool: tool, style: st, author: app.author)
+            let text = mkMeasure.formatArea(points2: Double(MarkupGeometry.polygonArea(pts)))
+            line.contents = text
+            let label = AnnotationFactory.measureLabel(text, near: MarkupGeometry.centroid(pts), color: st.color, author: app.author, root: line)
+            mkPerform(.add(page: page, annots: [line, label]))
+        default:
+            mkPerform(.add(page: page, annots: [AnnotationFactory.ink(paths: [pts], tool: .polyline, style: st, author: app.author)]))
+        }
     }
+
+    // MARK: measurement
+
+    var mkMeasure: MeasureScale { doc.measure ?? .unscaled }
+
+    /// Sets the drawing scale from a calibration line of `points` that the user says is `value` `unit`s long.
+    func mkApplyCalibration(points: CGFloat, value: Double, unit: MeasureUnit) {
+        guard value > 0, points > 0.5 else { return }
+        app.mutate(docID) { $0.measure = MeasureScale(pointsPerUnit: Double(points) / value, unit: unit) }
+        mk.calibratePending = nil
+        mk.renderTick += 1
+        app.flash("Scale set: measurements are in \(unit.label.lowercased())")
+    }
+
+    // MARK: text search
+
+    func mkSearch(_ q: String) {
+        mk.searchQuery = q
+        let t = q.trimmingCharacters(in: .whitespaces)
+        guard let pdf = mk.pdf, !t.isEmpty else { mk.searchHits = []; mk.searchIndex = 0; mk.renderTick += 1; return }
+        mk.searchHits = pdf.findString(t, withOptions: [.caseInsensitive])
+        mk.searchIndex = 0
+        if let first = mk.searchHits.first, let pg = first.pages.first { let i = pdf.index(for: pg); if i != pageIndex { setPage(i) } }
+        mk.renderTick += 1
+    }
+
+    func mkSearchStep(_ delta: Int) {
+        guard !mk.searchHits.isEmpty, let pdf = mk.pdf else { return }
+        mk.searchIndex = (mk.searchIndex + delta + mk.searchHits.count) % mk.searchHits.count
+        if let pg = mk.searchHits[mk.searchIndex].pages.first { let i = pdf.index(for: pg); if i != pageIndex { setPage(i) } }
+        mk.renderTick += 1
+    }
+
+    func mkCloseSearch() { mk.searchOpen = false; mk.searchHits = []; mk.searchQuery = ""; mk.renderTick += 1 }
 
     // MARK: callout geometry (shared by the live preview and the commit)
 
@@ -1597,6 +1669,23 @@ extension WorkspaceModel {
 }
 
 enum MarkupGeometry {
+    static func pathLength(_ pts: [CGPoint]) -> CGFloat {
+        guard pts.count > 1 else { return 0 }
+        return (1..<pts.count).reduce(0) { $0 + hypot(pts[$1].x - pts[$1 - 1].x, pts[$1].y - pts[$1 - 1].y) }
+    }
+    /// Shoelace area of a closed polygon.
+    static func polygonArea(_ pts: [CGPoint]) -> CGFloat {
+        guard pts.count >= 3 else { return 0 }
+        var s: CGFloat = 0
+        for i in 0..<pts.count { let a = pts[i], b = pts[(i + 1) % pts.count]; s += a.x * b.y - b.x * a.y }
+        return abs(s) / 2
+    }
+    static func centroid(_ pts: [CGPoint]) -> CGPoint {
+        guard !pts.isEmpty else { return .zero }
+        let n = CGFloat(pts.count)
+        return CGPoint(x: pts.map(\.x).reduce(0, +) / n, y: pts.map(\.y).reduce(0, +) / n)
+    }
+
     /// Revision cloud outline (page space) around a rectangle; `straight` gives the plain box instead of arcs.
     static func cloudPoints(_ rect: CGRect, straight: Bool = false) -> [CGPoint] {
         if straight {

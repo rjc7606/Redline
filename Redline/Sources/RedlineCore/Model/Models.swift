@@ -363,6 +363,8 @@ public struct Document: Codable, Sendable, Identifiable, Equatable, Hashable {
     public var lastOpened: Date?
     /// Notebook cover colour (hex). Optional so older data decodes; falls back to a palette pick by id.
     public var coverColor: String?
+    /// Drawing scale for the measure tools (nil = 72 points per inch, i.e. the sheet's own size).
+    public var measure: MeasureScale?
 
     public var folderPath: String { folder ?? "" }
     public var isFavorite: Bool { favorite ?? false }
@@ -419,5 +421,68 @@ public struct Rect: Codable, Sendable, Equatable, Hashable {
     }
     public static func from(_ a: Point, _ b: Point) -> Rect {
         Rect(x: min(a.x, b.x), y: min(a.y, b.y), w: abs(b.x - a.x), h: abs(b.y - a.y))
+    }
+}
+
+
+// MARK: - Measurement
+
+public enum MeasureUnit: String, Codable, Sendable, CaseIterable, Hashable {
+    case feet = "ft", inches = "in", meters = "m", millimeters = "mm"
+    public var label: String {
+        switch self { case .feet: "Feet"; case .inches: "Inches"; case .meters: "Meters"; case .millimeters: "Millimeters" }
+    }
+}
+
+/// How many PDF points one real-world unit covers on the page, set by calibrating against a known length.
+public struct MeasureScale: Codable, Sendable, Equatable, Hashable {
+    public var pointsPerUnit: Double
+    public var unit: MeasureUnit
+    public init(pointsPerUnit: Double, unit: MeasureUnit) { self.pointsPerUnit = pointsPerUnit; self.unit = unit }
+
+    /// No calibration: the page's own size (72 points per inch).
+    public static let unscaled = MeasureScale(pointsPerUnit: 72, unit: .inches)
+
+    public func length(points: Double) -> Double { points / pointsPerUnit }
+
+    public func formatLength(points: Double) -> String {
+        let v = length(points: points)
+        switch unit {
+        case .feet: return MeasureScale.feetInches(feet: v)
+        case .inches: return MeasureScale.inches(v)
+        case .meters: return String(format: "%.2f m", v)
+        case .millimeters: return String(format: "%.0f mm", v)
+        }
+    }
+
+    public func formatArea(points2: Double) -> String {
+        let v = points2 / (pointsPerUnit * pointsPerUnit)
+        switch unit {
+        case .feet: return String(format: "%.1f sq ft", v)
+        case .inches: return String(format: "%.1f sq in", v)
+        case .meters: return String(format: "%.2f m²", v)
+        case .millimeters: return String(format: "%.0f mm²", v)
+        }
+    }
+
+    /// 12'-6 1/2"
+    public static func feetInches(feet: Double) -> String {
+        let totalInches = feet * 12
+        let ft = Int(totalInches / 12)
+        let inchesPart = totalInches - Double(ft) * 12
+        let i = inches(inchesPart)
+        return ft > 0 ? "\(ft)'-\(i)" : i
+    }
+
+    /// 6 1/2" (nearest 1/16)
+    public static func inches(_ v: Double) -> String {
+        let sixteenths = Int((v * 16).rounded())
+        var whole = sixteenths / 16
+        var num = sixteenths % 16
+        var den = 16
+        while num > 0 && num % 2 == 0 { num /= 2; den /= 2 }
+        if num == 0 { return "\(whole)\"" }
+        if whole == 0 && v >= 12 { whole = Int(v) }
+        return "\(whole) \(num)/\(den)\""
     }
 }

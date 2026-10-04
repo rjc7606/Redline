@@ -408,5 +408,5 @@ extension ToolStyles {
     #expect(ToolCatalog.markupTabs.map(\.id) == ["draw", "annotate", "edit", "forms"])
     #expect(Tool.pen.hasPresets && Tool.eraser.hasPresets && !Tool.select.hasPresets)
     #expect(ToolCatalog.tool(for: .list) == .flist)
-    #expect(ToolCatalog.pickHint(for: .distance, rulerLocked: false) == "Measure tools are preview-only")
+    #expect(ToolCatalog.pickHint(for: .distance, rulerLocked: false) == "Drag on the page — distance")
 }
