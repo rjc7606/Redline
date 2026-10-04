@@ -29,19 +29,21 @@ final class LibraryHub {
     static let folderBookmarkKey = "redline.libraryFolderBookmark"
 
     private init() {
+        var folder: URL? = nil
         if let bm = UserDefaults.standard.data(forKey: LibraryHub.folderBookmarkKey) {
             var stale = false
             if let url = try? URL(resolvingBookmarkData: bm, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) {
                 _ = url.startAccessingSecurityScopedResource()
                 if FileManager.default.isReadableFile(atPath: url.path) {
-                    customFolder = url
+                    folder = url
                     if stale, let fresh = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
                         UserDefaults.standard.set(fresh, forKey: LibraryHub.folderBookmarkKey)
                     }
                 }
             }
         }
-        store = RedlineStore(data: LibraryHub.load(from: LibraryHub.dataFile(in: customFolder)) ?? Seed.data())
+        customFolder = folder
+        store = RedlineStore(data: LibraryHub.load(from: LibraryHub.dataFile(in: folder)) ?? Seed.data())
         watch()
     }
 
