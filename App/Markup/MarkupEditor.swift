@@ -818,7 +818,7 @@ extension WorkspaceModel {
             if !mkDragMoved { if hypot(dx, dy) < 2 / mkZoom { return }; mkDragMoved = true; mkPerform(.change(annots: snaps), alreadyApplied: true) }
             // Snap the moving set (as one rect) to the other annotations and the page.
             let moving = snaps.filter { !(boxOnly && $0.0.subtype == "Ink" && $0.0.redlineTool == .callout) }
-            if let first = moving.first {
+            if let first = moving.first, !moving.allSatisfy({ $0.0.subtype == "Text" }) {   // sticky notes never snap
                 var u = first.1.bounds
                 for (_, s) in moving.dropFirst() { u = u.union(s.bounds) }
                 let sn = mkSnapRect(u.offsetBy(dx: dx, dy: dy), page: page, excluding: snaps.map { $0.0 })
@@ -1080,7 +1080,7 @@ extension WorkspaceModel {
     }
 
     private func mkTap(at rawPoint: CGPoint, page: PDFPage) {
-        let p = mkSnapPoint(rawPoint, page: page).point
+        let p = tool == .note ? rawPoint : mkSnapPoint(rawPoint, page: page).point   // sticky notes go exactly where tapped
         let info = tool.info
         let author = app.author
         switch info.kind {
