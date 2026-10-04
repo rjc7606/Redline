@@ -162,8 +162,13 @@ final class AppModel {
     }
 
     /// Closes a tab. Pending PDF edits are written first. Switches to the neighbouring tab, or Home.
+    /// Coming back to the foreground: pick up edits other apps made to open PDFs.
+    func refreshOpenPDFs() {
+        for e in editors.values where e.isPDF { e.mkExternalChange() }
+    }
+
     func closeDocument(_ id: ID) {
-        if let e = editors[id], e.isPDF { e.mkSaveNow() }
+        if let e = editors[id], e.isPDF { e.mkSaveNow(); e.mkUnload() }
         let wasCurrent = editor?.docID == id
         let idx = openDocs.firstIndex(of: id) ?? 0
         openDocs.removeAll { $0 == id }
@@ -207,7 +212,7 @@ final class AppModel {
     }
 
     func deleteDocument(_ id: ID) {
-        if openDocs.contains(id) { editors[id] = nil; openDocs.removeAll { $0 == id }; if editor?.docID == id { editor = nil; screen = .home } }
+        if openDocs.contains(id) { editors[id]?.mkUnload(); editors[id] = nil; openDocs.removeAll { $0 == id }; if editor?.docID == id { editor = nil; screen = .home } }
         if let doc = store.document(id), let f = doc.pdfFile, !store.data.docs.contains(where: { $0.id != id && $0.pdfFile == f }) {
             // Removing a markup only forgets a PDF opened in place; it is never deleted from where it lives.
             if pdf.isExternal(f) { pdf.externalURL(f)?.stopAccessingSecurityScopedResource(); pdf.forget(f) }

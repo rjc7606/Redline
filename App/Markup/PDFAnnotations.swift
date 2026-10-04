@@ -406,8 +406,17 @@ enum AnnotationFactory {
 
     // MARK: replies & review state
 
+    /// Replies and review states are bookkeeping, not marks: a hair-sized rect at the parent's corner plus a blank
+    /// appearance stream (written on save), so no reader draws a note icon for them.
+    private static func hiddenNote(for parent: PDFAnnotation) -> PDFAnnotation {
+        let a = PDFAnnotation(bounds: CGRect(x: parent.bounds.minX, y: parent.bounds.maxY, width: 0.5, height: 0.5), forType: .text, withProperties: nil)
+        a.setValue(NSString(string: IDGen.make()), forAnnotationKey: .redlineID)
+        a.shouldDisplay = false
+        return a
+    }
+
     static func reply(to parent: PDFAnnotation, text: String, author: String) -> PDFAnnotation {
-        let a = PDFAnnotation(bounds: CGRect(x: parent.bounds.minX, y: parent.bounds.maxY, width: 20, height: 20), forType: .text, withProperties: nil)
+        let a = hiddenNote(for: parent)
         a.contents = text
         a.userName = author
         a.modificationDate = Date()
@@ -418,7 +427,7 @@ enum AnnotationFactory {
     }
 
     static func stateAnnotation(for parent: PDFAnnotation, status: CommentStatus, author: String) -> PDFAnnotation {
-        let a = PDFAnnotation(bounds: CGRect(x: parent.bounds.minX, y: parent.bounds.maxY, width: 20, height: 20), forType: .text, withProperties: nil)
+        let a = hiddenNote(for: parent)
         a.userName = author
         a.modificationDate = Date()
         a.setValue(parent, forAnnotationKey: .inReplyTo)

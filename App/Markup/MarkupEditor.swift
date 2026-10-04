@@ -79,6 +79,8 @@ final class MarkupState {
     @ObservationIgnored var lastErasePoint: CGPoint? = nil
     /// When the file was last written; appearance streams are rebuilt only for annotations modified since.
     @ObservationIgnored var lastSaveDate: Date? = nil
+    /// On-disk date of what is loaded (to tell a foreign change from our own write).
+    @ObservationIgnored var loadedDate: Date? = nil
     @ObservationIgnored var pendingTextEdit: PDFAnnotation? = nil
     /// Snapshot taken when a text edit starts (undo for the whole edit).
     @ObservationIgnored var textEditSnapshot: AnnotationSnapshot? = nil
@@ -90,6 +92,8 @@ final class MarkupState {
     var collapsedOutline: Set<String> = []
     /// Form field being filled in place (text / date / signature / dropdown), outside the Forms tab.
     var fieldEdit: PDFAnnotation? = nil
+    /// Watches the open file for edits made by other apps.
+    @ObservationIgnored var presenter: PDFFilePresenter? = nil
     /// Polyline being placed point by point.
     var polyPoints: [CGPoint] = []
     var polyPage: PDFPage? = nil
@@ -113,6 +117,37 @@ extension WorkspaceModel {
     func mkLoad() {
         guard type == .markup, let f = doc.pdfFile else { return }
         mk.pdf = app.pdf.document(f)   // rendered exactly as saved; nothing is rewritten on load
+        let presenter = PDFFilePresenter(url: app.pdf.url(for: f)) { [weak self] in self?.mkExternalChange() }
+        mk.presenter = presenter
+        NSFileCoordinator.addFilePresenter(presenter)
+    }
+
+    /// Stops watching the file (tab closed).
+    func mkUnload() {
+        if let p = mk.presenter { NSFileCoordinator.removeFilePresenter(p); mk.presenter = nil }
+    }
+
+    /// The file changed on disk (another app saved it, or it synced): reload unless Redline has unsaved edits.
+    func mkExternalChange() {
+        guard isPDF, let f = doc.pdfFile, let mod = app.pdf.modificationDate(f) else { return }
+        if let last = mk.lastSaveDate, mod.timeIntervalSince(last) < 3 { return }   // our own write
+        if let loaded = mk.loadedDate, mod.timeIntervalSince(loaded) < 1 { return }  // nothing new
+        if mk.dirty { app.flash("\(doc.name) was changed in another app; Redline's unsaved edits will be written over it"); return }
+        mkReload()
+    }
+
+    func mkReload() {
+        guard let f = doc.pdfFile else { return }
+        app.pdf.reload(f)
+        mk.pdf = app.pdf.document(f)
+        mk.loadedDate = app.pdf.modificationDate(f)
+        mk.undoStack.removeAll(); mk.redoStack.removeAll()
+        mk.textEdit = nil; mk.fieldEdit = nil
+        mkClearSelection()
+        mk.commentsCache = nil
+        pageIndex = min(pageIndex, max(0, mk.pageCount - 1))
+        mk.renderTick += 1
+        app.flash("Reloaded: \(doc.name) was edited in another app")
     }
 
     func mkMarkDirty() {
@@ -134,7 +169,7 @@ extension WorkspaceModel {
         let since = mk.lastSaveDate?.addingTimeInterval(-2)
         for i in 0..<pdf.pageCount {
             guard let p = pdf.page(at: i) else { continue }
-            for a in p.annotations where a.isRedlineTextBox || a.isRedlineNote || a.isRedlinePolygon || a.isRedlineLine || a.isRedlineMarkup || a.isRedlineInk || a.isRedlineShape || WidgetRenderer.wantsAppearance(a) {
+            for a in p.annotations where a.isRedlineTextBox || a.isRedlineNote || a.isRedlinePolygon || a.isRedlineLine || a.isRedlineMarkup || a.isRedlineInk || a.isRedlineShape || a.isRedlineHiddenNote || WidgetRenderer.wantsAppearance(a) {
                 // Untouched annotations keep the stream PDFKit carries over from the last save.
                 let fresh = since.map { (a.modificationDate ?? .distantFuture) >= $0 } ?? true
                 if fresh || a.value(forAnnotationKey: .appearanceDictionary) == nil { ours.append(a) }
@@ -150,6 +185,8 @@ extension WorkspaceModel {
         }
         if ok {
             mk.lastSaveDate = Date()
+            app.pdf.noteSaved(f)
+            mk.loadedDate = app.pdf.modificationDate(f)
             app.pdf.invalidateImages(f)
             app.patch(docID) { $0.modified = Date() }
         } else {
@@ -1467,4 +1504,21 @@ enum MarkupGeometry {
         }
         return out
     }
+}
+
+
+/// NSFilePresenter for the open PDF: tells the editor when another app writes the file.
+final class PDFFilePresenter: NSObject, NSFilePresenter, @unchecked Sendable {
+    let presentedItemURL: URL?
+    let presentedItemOperationQueue = OperationQueue()
+    private let onChange: @Sendable () -> Void
+
+    init(url: URL, onChange: @escaping @MainActor () -> Void) {
+        presentedItemURL = url
+        self.onChange = { Task { @MainActor in onChange() } }
+        super.init()
+    }
+
+    func presentedItemDidChange() { onChange() }
+    func presentedItemDidMove(to newURL: URL) { onChange() }
 }

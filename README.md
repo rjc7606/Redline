@@ -10,7 +10,10 @@ annotation engine, one toolbar behaviour, one Style Popover and one set of colou
   Redline folder tree, Browse Files… for iCloud Drive, OneDrive, Dropbox and other Files providers) plus
   Drawings and Notes rows that expand to recent documents; the right pane shows Recents rails, a folder, or a gallery.
   PDFs picked in Files (or sent with "Open in Redline") open in place: nothing is copied, edits are written back
-  where the file lives, and removing the markup from the library never deletes the file.
+  where the file lives, and removing the markup from the library never deletes the file. If another app saves the
+  file, Redline reloads it (while open, and when the app returns to the foreground; thumbnails refresh too) unless
+  Redline has unsaved edits of its own. Replies and review states are invisible in every reader (hair-sized rects
+  with a blank appearance); only the on-screen badge shows that a mark has a comment.
 - **Drawings** — layered plan sets: a Base layer plus trace layers with a white "veil", lock/hide,
   flatten down / flatten all.
 - **Notes** — paged notebooks: paper colours, templates, tags, single page or facing spread, and a

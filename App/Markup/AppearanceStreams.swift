@@ -73,6 +73,8 @@ extension PDFAnnotation {
     var isRedlineWidget: Bool { subtype == "Widget" && redlineID != nil }
     /// A rectangle / ellipse drawn by Redline.
     var isRedlineShape: Bool { (subtype == "Square" || subtype == "Circle") && redlineID != nil }
+    /// A reply or review-state note Redline made: gets a blank appearance so no reader draws it.
+    var isRedlineHiddenNote: Bool { (isReply || isStateAnnotation) && redlineID != nil }
     /// Pen / marker ink drawn by Redline (PDFKit ignores an Ink annotation's opacity and doubles overlaps).
     var isRedlineInk: Bool { subtype == "Ink" && redlineID != nil }
     /// Highlight / underline / strikeout / squiggly drawn by Redline (PDFKit ignores their opacity).
@@ -381,6 +383,17 @@ enum WidgetRenderer {
     }
 }
 
+/// A blank appearance (a content stream that paints nothing) for notes that must stay invisible.
+enum BlankRenderer {
+    static func appearancePDF(for a: PDFAnnotation) -> Data {
+        UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 1, height: 1)).pdfData { c in
+            c.beginPage()
+            c.cgContext.setAlpha(0)
+            c.cgContext.fill(CGRect(x: 0, y: 0, width: 0.1, height: 0.1))   // ensures a content stream exists
+        }
+    }
+}
+
 /// Rectangle / ellipse drawn by Redline: real dotted borders, opacity, interior fill.
 final class RedlineShape: PDFAnnotation {
     override func draw(with box: PDFDisplayBox, in context: CGContext) {
@@ -615,7 +628,7 @@ enum TextBoxRenderer {
 enum AppearancePatcher {
     @discardableResult
     static func patch(fileURL: URL, annotations: [PDFAnnotation]) -> Bool {
-        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || $0.isRedlineInk || $0.isRedlineShape || WidgetRenderer.wantsAppearance($0) }
+        let ours = annotations.filter { $0.isRedlineTextBox || $0.isRedlineNote || $0.isRedlinePolygon || $0.isRedlineLine || $0.isRedlineMarkup || $0.isRedlineInk || $0.isRedlineShape || $0.isRedlineHiddenNote || WidgetRenderer.wantsAppearance($0) }
         guard !ours.isEmpty, let data = try? Data(contentsOf: fileURL), let file = PDFFile(data: data) else { return ours.isEmpty }
         var byID: [String: (num: Int, dict: [String: PDFObj])] = [:]
         for page in file.pages() {
@@ -635,6 +648,7 @@ enum AppearancePatcher {
             else if a.isRedlineMarkup { helperData = MarkupRenderer.appearancePDF(for: a) }
             else if a.isRedlineInk { helperData = InkRenderer.appearancePDF(for: a) }
             else if a.isRedlineShape { helperData = ShapeRenderer.appearancePDF(for: a) }
+            else if a.isRedlineHiddenNote { helperData = BlankRenderer.appearancePDF(for: a) }
             else { helperData = TextBoxRenderer.appearancePDF(for: a) }
             guard let helper = PDFFile(data: helperData), let page = helper.pages().first else { continue }
             let importer = PDFObjectImporter(source: helper, firstFreeNumber: next)

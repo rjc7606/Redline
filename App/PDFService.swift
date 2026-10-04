@@ -32,7 +32,7 @@ enum PDFDraw {
     static func annotations(of page: PDFPage, in cg: CGContext) {
         cg.saveGState()
         cg.concatenate(page.transform(for: .mediaBox))
-        for a in page.annotations where a.shouldDisplay && !a.isPopup {
+        for a in page.annotations where a.shouldDisplay && !a.isPopup && !a.isReply && !a.isStateAnnotation {
             a.draw(with: .mediaBox, in: cg)
         }
         cg.restoreGState()
@@ -102,6 +102,36 @@ final class PDFService {
     private let maxImages = 12
 
     func register(_ file: String, url: URL) { external[file] = url; docs[file] = nil }
+
+    /// Modification date on disk.
+    func modificationDate(_ file: String) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url(for: file).path))?[.modificationDate] as? Date
+    }
+    @ObservationIgnored private var loadedDates: [String: Date] = [:]
+    @ObservationIgnored private var lastChecks: [String: Date] = [:]
+
+    /// Drops everything cached for a file (document, page images, thumbnails) so it reloads from disk; the
+    /// in-place registration is kept.
+    func reload(_ file: String) {
+        docs[file] = nil
+        loadedDates[file] = nil
+        for k in images.keys where k.hasPrefix(file + "#") { images[k] = nil }
+        for k in thumbs.keys where k.hasPrefix("t:" + file + "#") { thumbs[k] = nil }
+        imageOrder.removeAll { $0.hasPrefix(file + "#") }
+        revision += 1
+    }
+
+    /// Reloads a cached file if it changed on disk since it was loaded (checked at most every few seconds).
+    func refreshIfChanged(_ file: String) {
+        let now = Date()
+        if let last = lastChecks[file], now.timeIntervalSince(last) < 4 { return }
+        lastChecks[file] = now
+        guard docs[file] != nil, let loaded = loadedDates[file], let mod = modificationDate(file), mod.timeIntervalSince(loaded) > 1 else { return }
+        reload(file)
+    }
+
+    /// Records the on-disk date as "what we have" (after our own save).
+    func noteSaved(_ file: String) { loadedDates[file] = modificationDate(file) ?? Date() }
     func isExternal(_ file: String) -> Bool { file.hasPrefix("ext:") }
     func externalURL(_ file: String) -> URL? { external[file] }
 
@@ -118,6 +148,7 @@ final class PDFService {
         if let d = docs[file] { return d }
         guard let d = PDFDocument(url: url(for: file)) else { return nil }
         docs[file] = d
+        loadedDates[file] = modificationDate(file) ?? Date()
         return d
     }
 
@@ -174,6 +205,7 @@ final class PDFService {
 
     /// Small (400 px wide) rendering for the home tiles; nil while it renders.
     func thumbnail(file: String, index: Int) -> UIImage? {
+        refreshIfChanged(file)
         let key = "t:\(file)#\(index)"
         if let t = thumbs[key] { return t }
         request(key: key, file: file, index: index, width: 400, thumb: true)

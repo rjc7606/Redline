@@ -13,7 +13,7 @@ struct RedlineApp: App {
                 .preferredColorScheme(model.preferredColorScheme)
                 .onOpenURL { url in model.openPDF(from: url) }
                 // Leaving the foreground (switching apps, lock, termination) writes everything pending.
-                .onChange(of: scenePhase) { _, phase in if phase != .active { model.flushSaves() } }
+                .onChange(of: scenePhase) { _, phase in if phase != .active { model.flushSaves() } else { model.refreshOpenPDFs() } }
         }
     }
 }
