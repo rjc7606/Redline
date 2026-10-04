@@ -404,7 +404,7 @@ final class RedlineImage: PDFAnnotation {
     }
 }
 
-enum ImageRenderer {
+enum ImageStampRenderer {
     static func appearancePDF(for a: PDFAnnotation) -> Data? {
         guard let img = ImageStore.shared.image(for: a.redlineID) else { return nil }
         let size = CGSize(width: max(1, a.bounds.width), height: max(1, a.bounds.height))
@@ -681,7 +681,7 @@ enum AppearancePatcher {
             else if a.isRedlineInk { helperData = InkRenderer.appearancePDF(for: a) }
             else if a.isRedlineShape { helperData = ShapeRenderer.appearancePDF(for: a) }
             else if a.isRedlineHiddenNote { helperData = BlankRenderer.appearancePDF(for: a) }
-            else if a.isRedlineImage { guard let d = ImageRenderer.appearancePDF(for: a) else { continue }; helperData = d }
+            else if a.isRedlineImage { guard let d = ImageStampRenderer.appearancePDF(for: a) else { continue }; helperData = d }
             else { helperData = TextBoxRenderer.appearancePDF(for: a) }
             guard let helper = PDFFile(data: helperData), let page = helper.pages().first else { continue }
             let importer = PDFObjectImporter(source: helper, firstFreeNumber: next)
