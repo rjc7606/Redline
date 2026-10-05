@@ -97,7 +97,7 @@ enum PDFContentEditor {
             let c = cos(info.angle), s = sin(info.angle)
             tail.append(contentsOf: "\nq BT\n".utf8)
             if !info.fillOps.isEmpty { tail.append(contentsOf: (info.fillOps + "\n").utf8) }
-            tail.append(contentsOf: String(format: "/%@ %.3f Tf %.4f %.4f %.4f %.4f %.3f %.3f Tm ", fontName!, info.size, c, s, -s, c, info.origin.x, info.origin.y).utf8)
+            tail.append(contentsOf: ("/" + fontName! + " " + String(format: "%.3f Tf %.4f %.4f %.4f %.4f %.3f %.3f Tm ", info.size, c, s, -s, c, info.origin.x, info.origin.y)).utf8)
             tail.append(contentsOf: "<".utf8)
             tail.append(contentsOf: winAnsi(text).map { String(format: "%02X", $0) }.joined().utf8)
             tail.append(contentsOf: "> Tj\nET Q\n".utf8)
@@ -322,7 +322,7 @@ final class ContentRewriter {
         func num(_ i: Int) -> Double { if i < operands.count, case .number(let d) = operands[i] { return d }; return 0 }
         func copyThrough() { out.append(contentsOf: bytes[segStart..<lx.pos]); segStart = lx.pos }
         func drop() { segStart = lx.pos }
-        func replace(with s: String) { out.append(contentsOf: s.utf8); segStart = lx.pos }
+        func replace(with s: String) { out.append(contentsOf: (" " + s).utf8); segStart = lx.pos }
         func operandText() -> String { String(decoding: bytes[segStart..<lx.pos], as: UTF8.self) }
 
         func glyphAdvance(_ code: Int, len: Int, font: FontInfo) -> CGFloat {
