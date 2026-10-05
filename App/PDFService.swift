@@ -135,6 +135,8 @@ final class PDFService {
 
     /// Records the on-disk date as "what we have" (after our own save).
     func noteSaved(_ file: String) { loadedDates[file] = modificationDate(file) ?? Date() }
+    /// When the cached document was read from disk (or last saved) — shared by every window showing it.
+    func loadedDate(_ file: String) -> Date? { loadedDates[file] }
     func isExternal(_ file: String) -> Bool { file.hasPrefix("ext:") }
     func externalURL(_ file: String) -> URL? { external[file] }
 

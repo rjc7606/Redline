@@ -65,6 +65,8 @@ public struct RedlineData: Codable, Sendable, Equatable {
     public var settings: AppSettings
     public var palettes: PaletteStore
     public var styles: ToolStyles
+    /// Documents deleted here, with when: a sync folder uses these so a deletion wins over an older copy elsewhere.
+    public var deleted: [ID: Date]?
 
     public static let currentVersion = 1
 
@@ -160,6 +162,9 @@ public struct RedlineStore: Sendable {
     public mutating func deleteDocument(_ id: ID) {
         data.docs.removeAll { $0.id == id }
         histories[id] = nil
+        var t = data.deleted ?? [:]
+        t[id] = Date()
+        data.deleted = t
     }
 
     public mutating func renameDocument(_ id: ID, to name: String) {

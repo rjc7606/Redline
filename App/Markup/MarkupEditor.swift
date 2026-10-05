@@ -163,29 +163,38 @@ extension WorkspaceModel {
     /// The file changed on disk (another app saved it, or it synced): reload unless Redline has unsaved edits.
     func mkExternalChange() {
         guard isPDF, let f = doc.pdfFile, let mod = app.pdf.modificationDate(f) else { return }
+        // "Loaded" is shared by every window showing this file, so a save from another window is not an external change.
+        if let loaded = app.pdf.loadedDate(f) ?? mk.loadedDate, mod.timeIntervalSince(loaded) < 1 { return }
         if let last = mk.lastSaveDate, mod.timeIntervalSince(last) < 3 { return }   // our own write
-        if let loaded = mk.loadedDate, mod.timeIntervalSince(loaded) < 1 { return }  // nothing new
-        if mk.dirty { app.flash("\(doc.name) was changed in another app; Redline's unsaved edits will be written over it"); return }
+        if app.hub.editors(for: f).contains(where: { $0.mk.dirty }) { app.flash("\(doc.name) was changed in another app; Redline's unsaved edits will be written over it"); return }
         mkReload()
     }
 
+    /// Reloads the file from disk for every window that shows it.
     func mkReload() {
         guard let f = doc.pdfFile else { return }
-        app.pdf.reload(f)
+        app.hub.reloadPDF(f)
+        app.flash("Reloaded: \(doc.name) was edited in another app")
+    }
+
+    /// The shared document was replaced (reload, sync): drop everything that pointed into the old one.
+    func mkAdoptReloaded() {
+        guard let f = doc.pdfFile else { return }
         mk.pdf = app.pdf.document(f)
         mk.loadedDate = app.pdf.modificationDate(f)
+        mk.dirty = false
         mk.undoStack.removeAll(); mk.redoStack.removeAll()
         mk.textEdit = nil; mk.fieldEdit = nil
         mkClearSelection()
         mk.commentsCache = nil
         pageIndex = min(pageIndex, max(0, mk.pageCount - 1))
         mk.renderTick += 1
-        app.flash("Reloaded: \(doc.name) was edited in another app")
     }
 
     func mkMarkDirty() {
         mk.dirty = true
         mk.renderTick += 1
+        if let f = doc.pdfFile { app.hub.noteEdited(f, by: self) }   // the same PDF in another window redraws
         mk.saveTask?.cancel()
         mk.saveTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(800))

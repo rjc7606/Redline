@@ -374,9 +374,9 @@ final class PDFAnnotationsView: UIView {
         cg.scaleBy(x: scale, y: -scale)
         let unit = 1 / max(0.01, scale)
         if let has = badges?(page) {
-            PDFDraw.annotations(of: page, in: cg) { a, cg in
+            PDFDraw.annotations(of: page, in: cg, after: { a, cg in
                 if has(a) { BadgeDrawer.draw(cg, at: BadgeDrawer.center(for: a, unit: unit), color: a.color, unit: unit, yUp: true) }
-            }
+            })
         } else {
             PDFDraw.annotations(of: page, in: cg)
         }

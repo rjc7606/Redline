@@ -116,11 +116,13 @@ final class AppModel {
         for id in openDocs where store.document(id) == nil { closeDocument(id) }
     }
 
-    /// Moves the library to a folder (nil = app storage). Needs every document closed, in every window.
-    func changeLibraryFolder(_ url: URL?) {
-        guard !hub.anyDocumentOpen else { flash("Close every open document first (in every window)"); return }
-        if let err = hub.useFolder(url) { flash(err); return }
-        flash(url.map { "Library now in \($0.lastPathComponent)" } ?? "Library back in app storage")
+    /// Every open editor in this window.
+    var allEditors: [WorkspaceModel] { Array(editors.values) }
+
+    /// Mirrors the library to a folder (nil stops syncing).
+    func setSyncFolder(_ url: URL?) {
+        if let err = hub.setSyncFolder(url) { flash(err); return }
+        flash(url.map { "Syncing with \($0.lastPathComponent)" } ?? "Sync stopped")
     }
 
     /// Re-attaches PDFs that were opened in place (security-scoped bookmarks) so they load, render and save where they live.
@@ -194,7 +196,6 @@ final class AppModel {
 
     func openDocument(_ id: ID) {
         guard store.document(id) != nil else { return }
-        if hub.isOpenElsewhere(id, than: self) { flash("Already open in another window"); return }
         if let cur = editor, cur.docID != id, cur.isPDF { cur.mkSaveNow() }
         store.noteOpened(id)
         if !openDocs.contains(id) { openDocs.append(id) }
@@ -216,6 +217,7 @@ final class AppModel {
     /// Coming back to the foreground: pick up edits other apps made to open PDFs.
     func refreshOpenPDFs() {
         for e in editors.values where e.isPDF { e.mkExternalChange() }
+        hub.foreground()
     }
 
     func closeDocument(_ id: ID) {
@@ -263,6 +265,7 @@ final class AppModel {
     }
 
     func deleteDocument(_ id: ID) {
+        for other in hub.apps where other !== self && other.openDocs.contains(id) { other.closeDocument(id) }
         if openDocs.contains(id) { editors[id]?.mkUnload(); editors[id] = nil; openDocs.removeAll { $0 == id }; if editor?.docID == id { editor = nil; screen = .home } }
         if let doc = store.document(id), let f = doc.pdfFile, !store.data.docs.contains(where: { $0.id != id && $0.pdfFile == f }) {
             // Removing a markup only forgets a PDF opened in place; it is never deleted from where it lives.

@@ -67,20 +67,28 @@ struct GeneralSettings: View {
         VStack(alignment: .leading, spacing: 22) {
             Text("General").font(titleFnt(20)).foregroundStyle(theme.ink1)
             VStack(alignment: .leading, spacing: 6) {
-                SectionLabel(text: "Library location")
+                SectionLabel(text: "iCloud sync")
                 HStack(spacing: 8) {
-                    Image(systemName: app.hub.customFolder == nil ? "ipad" : "folder.fill").font(fnt(14)).foregroundStyle(theme.ink3)
-                    Text(app.hub.customFolder.map { "Folder: " + $0.lastPathComponent } ?? "On this iPad (app storage)").font(fnt(14, .medium)).foregroundStyle(theme.ink1)
+                    Image(systemName: app.hub.syncFolder == nil ? "icloud.slash" : "icloud.fill").font(fnt(14)).foregroundStyle(app.hub.syncFolder == nil ? theme.ink4 : theme.accent)
+                    if let f = app.hub.syncFolder {
+                        Text("Syncing with \(f.lastPathComponent)" + (app.hub.lastSync.map { " · " + Formatting.ago($0) } ?? "")).font(fnt(14, .medium)).foregroundStyle(theme.ink1)
+                    } else {
+                        Text("Not syncing").font(fnt(14, .medium)).foregroundStyle(theme.ink1)
+                    }
                 }
+                if !app.hub.syncNote.isEmpty { Text(app.hub.syncNote).font(fnt(12)).foregroundStyle(theme.danger) }
                 HStack(spacing: 8) {
-                    SecondaryButton(label: "Choose folder…", symbol: "folder", height: 32) { folderPickerOn = true }
-                    if app.hub.customFolder != nil { SecondaryButton(label: "Use app storage", symbol: "ipad", height: 32) { app.changeLibraryFolder(nil) } }
+                    SecondaryButton(label: app.hub.syncFolder == nil ? "Choose folder…" : "Change folder…", symbol: "folder", height: 32) { folderPickerOn = true }
+                    if app.hub.syncFolder != nil {
+                        SecondaryButton(label: "Sync now", symbol: "arrow.triangle.2.circlepath", height: 32) { app.hub.syncNow(); app.flash("Synced") }
+                        SecondaryButton(label: "Stop", symbol: "xmark", height: 32) { app.setSyncFolder(nil) }
+                    }
                 }
-                Text("Keep the library (notebooks, drawings, markups and their PDFs) in a folder you choose. Pick a folder in iCloud Drive and choose the same folder on your other iPad to keep them in sync. Close every document in every window before switching.")
+                Text("The library stays on this iPad. Pick a folder in iCloud Drive (or any Files location) and Redline keeps a copy of your notebooks, drawings, markups and their PDFs there; choose the same folder on another iPad and both stay in step — the newer version of a document wins. PDFs opened in place are not copied.")
                     .font(fnt(12)).foregroundStyle(theme.ink3).lineSpacing(2)
             }
             .fileImporter(isPresented: $folderPickerOn, allowedContentTypes: [UTType.folder]) { result in
-                if case .success(let url) = result { app.changeLibraryFolder(url) }
+                if case .success(let url) = result { app.setSyncFolder(url) }
             }
             VStack(alignment: .leading, spacing: 6) {
                 SectionLabel(text: "Your name on comments")
