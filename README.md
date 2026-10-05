@@ -141,25 +141,28 @@ swift test
   with the tip fixed (a side you chose is kept while the tip is still out on that side, otherwise the elbow faces the
   tip), dragging the leader moves the whole callout, and the tip handle re-aims the arrow. Polylines are placed point by point: tap to add a vertex, tap the last one to finish, tap the first
   to close.
-- Measure tools: Distance (drag; ticks and the live length), Perimeter and Area (tap the corners; running
+- Measure tab: Distance (drag; dimension ticks at both ends, the label sits centred on the line at its angle),
+  Perimeter and Area (tap the corners; running
   totals), each committed with a grouped label that moves with it, and Calibrate (drag along a known length, enter
   what it is in feet, inches, metres or millimetres) which sets the document's scale; uncalibrated documents measure
   in the sheet's own inches. Find (magnifier in the top bar) searches the PDF text and highlights every hit.
-- Copy, paste and duplicate annotations (selection bar menu, Paste in the tool bar, ⌘C ⌘V ⌘D): groups such as
-  callouts, filled outlines and measurements stay grouped; pastes land centred in view on the current page of
-  whichever document is open.
+- Copy, paste and duplicate annotations (selection bar menu, long-press the page for the edit menu with Paste,
+  ⌘C ⌘V ⌘D): groups such as callouts, filled outlines and measurements stay grouped. A long press on an
+  annotation offers Copy / Duplicate / Delete.
 - Insert image (Edit tab): a photo from the library or an image file from Files, placed with a tap, resized by its
   corner; the pixels go into the appearance stream so every reader shows them. Organize Pages has Append PDF… and
-  an Extract button per page (a one-page PDF added to the library). The Signature tool places your saved signature
-  (draw it once in the pad; manage, reorder and delete from the Signature tool's editor).
-- Lines and arrows: start and end endings (none, open, filled, dot, square) in the Properties popup; the live
-  preview shows them.
+  an Extract button per page (shares that page as a one-page PDF). The Signature tool places your saved signature
+  (draw it in the pad or import a photo / file of it — the paper is made transparent; manage, reorder and delete
+  from the Signature tool's editor).
+- Arrows: start and end endings (none, open, filled, dot, square) picked from pictures in the Properties popup;
+  the preset previews and the live preview show them. Plain lines have no endings.
 - Rotate handle above text boxes, text stamps and images (snaps every 15°); More menu has rotate 90° and, for
   images, flip. Lock / Unlock (More menu, ⇧⌘L) sets the PDF "Locked" flag: no move, resize, restyle or delete,
   comments still allowed; other readers honour it too.
 - Links: tapping a link with Select or no tool follows it (web or page); the Link tool (Edit tab) draws a box and
   asks for a web address or page number, shows existing links, and selects one to delete it.
-- Comments sidebar: sort (page / newest / author) and show (all / open / resolved) menu, "next unresolved" (⇧⌘U).
+- Comments sidebar: search (text and authors), sort (page / newest / author) and show (all / open / resolved)
+  menu, "next unresolved" (⇧⌘U).
   Export has a comment summary PDF and a CSV.
 - Flatten… lets you burn in everything, only the selection, or chosen authors; the rest stay editable.
 - Multiple windows: "Open in New Window" on a document's menu, "Move to New Window" on a tab, or drag a

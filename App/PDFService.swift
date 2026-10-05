@@ -30,11 +30,13 @@ enum PDFDraw {
 
     /// Draws a page's annotations into a context set up like `content(of:in:)` (display box, y up): foreign ones
     /// through PDFKit from their appearance streams, Redline's own through their drawing subclasses.
-    static func annotations(of page: PDFPage, in cg: CGContext, include: (PDFAnnotation) -> Bool = { _ in true }) {
+    static func annotations(of page: PDFPage, in cg: CGContext, include: (PDFAnnotation) -> Bool = { _ in true },
+                            after: ((PDFAnnotation, CGContext) -> Void)? = nil) {
         cg.saveGState()
         cg.concatenate(page.transform(for: .cropBox))
         for a in page.annotations where a.shouldDisplay && !a.isPopup && !a.isReply && !a.isStateAnnotation && include(a) {
             a.draw(with: .cropBox, in: cg)
+            after?(a, cg)
         }
         cg.restoreGState()
     }

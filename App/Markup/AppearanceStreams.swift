@@ -547,6 +547,16 @@ enum LineRenderer {
         cg.setFillColor(a.color.cgColor)
         ending(a.endLineStyle, at: p1, from: p0, width: w, in: cg)
         ending(a.startLineStyle, at: p0, from: p1, width: w, in: cg)
+        if a.redlineTool == .distance || a.redlineTool == .calibrate {
+            // Dimension ticks: short hashes across both ends, like a drawing.
+            let t = max(5, w * 3)
+            let ang = atan2(p1.y - p0.y, p1.x - p0.x)
+            for e in [p0, p1] {
+                cg.move(to: CGPoint(x: e.x - t * sin(ang), y: e.y + t * cos(ang)))
+                cg.addLine(to: CGPoint(x: e.x + t * sin(ang), y: e.y - t * cos(ang)))
+            }
+            cg.strokePath()
+        }
         cg.restoreGState()
     }
 

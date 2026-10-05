@@ -651,7 +651,7 @@ extension WorkspaceModel {
     // MARK: - Comments
 
     func mkComments() -> [MarkupComment] {
-        let cacheKey = authorFilter.rawValue + "|" + commentSort.rawValue + "|" + commentShow.rawValue
+        let cacheKey = authorFilter.rawValue + "|" + commentSort.rawValue + "|" + commentShow.rawValue + "|" + commentQuery
         if let c = mk.commentsCache, c.tick == mk.renderTick, c.key == cacheKey { return c.items }
         guard let pdf = mk.pdf else { return [] }
         var out: [MarkupComment] = []
@@ -692,6 +692,13 @@ extension WorkspaceModel {
             }
         }
         var shown = out
+        let q = commentQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !q.isEmpty {
+            shown = shown.filter { c in
+                c.text.localizedCaseInsensitiveContains(q) || c.author.localizedCaseInsensitiveContains(q)
+                    || c.replies.contains { $0.text.localizedCaseInsensitiveContains(q) || $0.author.localizedCaseInsensitiveContains(q) }
+            }
+        }
         switch commentShow {
         case .all: break
         case .open: shown = shown.filter { $0.status == .open }
@@ -744,6 +751,7 @@ extension WorkspaceModel {
     /// Whether an annotation carries comment text or replies (drives the badge).
     func mkHasComment(_ a: PDFAnnotation, replied: Set<ObjectIdentifier>) -> Bool {
         if a.redlineTool == .note || a.subtype == "Text" { return false }   // a sticky note IS the comment
+        if ToolCatalog.measureTools.contains(a.redlineTool) { return replied.contains(ObjectIdentifier(a)) }   // its text is the measurement
         if !a.redlineTool.isTextual, !(a.contents ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
         return replied.contains(ObjectIdentifier(a))
     }
@@ -775,7 +783,7 @@ extension WorkspaceModel {
             if let ic = a.interiorColor { p.fill = PDFColors.hex(ic); p.fillPattern = .solid; var al: CGFloat = 1; ic.getWhite(nil, alpha: &al); p.fillOpacity = Double(al) } else { p.fillPattern = FillPattern.none }
         }
         p.lineStyle = AnnotationFactory.lineStyle(of: a)
-        if a.subtype == "Line", [Tool.line, .arrow, .dblarrow].contains(tool) {
+        if a.subtype == "Line", tool == .arrow || tool == .dblarrow {
             p.lineStart = LineEnding(a.startLineStyle); p.lineEnd = LineEnding(a.endLineStyle)
         }
         return p
@@ -800,7 +808,7 @@ extension WorkspaceModel {
             if a.subtype == "Square" || a.subtype == "Circle" {
                 if let fp = p.fillPattern, fp != FillPattern.none { a.interiorColor = PDFColors.uiColor(p.fill ?? p.color, alpha: p.fillOpacity ?? 0.5) } else { a.interiorColor = nil }
             }
-            if a.subtype == "Line" {
+            if a.subtype == "Line", a.redlineTool == .arrow || a.redlineTool == .dblarrow {
                 if let s = p.lineStart { a.startLineStyle = s.pdfStyle }
                 if let e = p.lineEnd { a.endLineStyle = e.pdfStyle }
             }
@@ -965,14 +973,8 @@ extension WorkspaceModel {
         let out = PDFDocument()
         out.insert(copy, at: 0)
         let base = doc.name.replacingOccurrences(of: ".pdf", with: "")
-        var file = "\(base) – page \(i + 1).pdf"
-        var n = 2
-        while FileManager.default.fileExists(atPath: PDFService.directory.appendingPathComponent(file).path) { file = "\(base) – page \(i + 1) \(n).pdf"; n += 1 }
-        guard out.write(to: PDFService.directory.appendingPathComponent(file)) else { app.flash("Couldn't extract the page"); return }
-        let d = app.store.createDocument(type: .markup, name: file.replacingOccurrences(of: ".pdf", with: ""), pageCount: 1, pdfFile: file)
-        app.store.patch(d.id) { $0.sheetSize = PDFService.canvasSize(for: page); $0.folder = doc.folderPath }
-        app.scheduleSave()
-        app.flash("Extracted to the library: \(file)")
+        guard let data = out.dataRepresentation(), let url = PDFExport.write(data, name: "\(base) – page \(i + 1).pdf") else { app.flash("Couldn't extract the page"); return }
+        shareURL = url   // the share sheet: save it anywhere, send it, or open it in another app
     }
 
     // MARK: - Export
@@ -1399,6 +1401,9 @@ extension WorkspaceModel {
         }
     }
 
+    /// A finger is resting on the page without having started anything (a long press may open the edit menu).
+    var mkIsPanning: Bool { if case .pan? = mkDrag { return !mkDragMoved } else { return false } }
+
     func mkPointerCancel() {
         if case .erase? = mkDrag, let pg = mk.eraserPage { mkEndErase(on: pg) }
         mkDrag = nil
@@ -1501,8 +1506,8 @@ extension WorkspaceModel {
                 let text = mkMeasure.formatLength(points: Double(hypot(b.x - a.x, b.y - a.y)))
                 line.contents = text
                 line.setValue(NSString(string: "/LineDimension"), forAnnotationKey: .intent)
-                let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
-                annots = [line, AnnotationFactory.measureLabel(text, near: mid, color: st.color, author: author, root: line)]
+                annots = [line, AnnotationFactory.measureLabel(text, center: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2),
+                                                               angle: atan2(b.y - a.y, b.x - a.x) * 180 / .pi, color: st.color, author: author, root: line)]
             case .calibrate:
                 mk.calibratePending = hypot(b.x - a.x, b.y - a.y)
                 return
@@ -1923,7 +1928,9 @@ extension WorkspaceModel {
             let line = AnnotationFactory.ink(paths: [pts], tool: tool, style: st, author: app.author)
             let text = mkMeasure.formatLength(points: Double(MarkupGeometry.pathLength(pts)))
             line.contents = text
-            let label = AnnotationFactory.measureLabel(text, near: pts[pts.count - 1], color: st.color, author: app.author, root: line)
+            let a = pts[pts.count - 2], b = pts[pts.count - 1]
+            let label = AnnotationFactory.measureLabel(text, center: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2),
+                                                       angle: atan2(b.y - a.y, b.x - a.x) * 180 / .pi, color: st.color, author: app.author, root: line)
             mkPerform(.add(page: page, annots: [line, label]))
         case .area:
             guard pts.count >= 3 else { return }
@@ -1931,7 +1938,7 @@ extension WorkspaceModel {
             let line = AnnotationFactory.ink(paths: [pts], tool: tool, style: st, author: app.author)
             let text = mkMeasure.formatArea(points2: Double(MarkupGeometry.polygonArea(pts)))
             line.contents = text
-            let label = AnnotationFactory.measureLabel(text, near: MarkupGeometry.centroid(pts), color: st.color, author: app.author, root: line)
+            let label = AnnotationFactory.measureLabel(text, center: MarkupGeometry.centroid(pts), color: st.color, author: app.author, root: line)
             mkPerform(.add(page: page, annots: [line, label]))
         default:
             mkPerform(.add(page: page, annots: [AnnotationFactory.ink(paths: [pts], tool: .polyline, style: st, author: app.author)]))

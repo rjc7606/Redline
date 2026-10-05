@@ -107,13 +107,16 @@ public enum ToolCatalog {
     public static let pens: Set<Tool> = [.pen, .fineliner, .felt, .marker]
     public static let closedShapes: Set<Tool> = [.rect, .ellipse, .cloud]
     public static let lineLike: Set<Tool> = [.line, .arrow, .dblarrow, .polyline, .underline, .strike, .distance, .perimeter, .area, .calibrate]
+    /// Measurements: their text is the measurement, never a comment.
+    public static let measureTools: Set<Tool> = [.distance, .perimeter, .area, .calibrate]
 
     /// Markup workspace tabs (excluding the user-defined Favorites tabs).
     public static let markupTabs: [ToolTab] = [
         // Polygon, check, x mark, date stamp and initials are gone from the tabs: marks and dates are stamps now
         // (the enum cases stay so older documents and pins still decode).
-        ToolTab(id: "draw", label: "Draw", tools: [.fineliner, .felt, .marker, .fill, .eraser, .rect, .ellipse, .line, .arrow, .dblarrow, .polyline, .cloud, .distance, .perimeter, .area, .calibrate]),
+        ToolTab(id: "draw", label: "Draw", tools: [.fineliner, .felt, .marker, .fill, .eraser, .rect, .ellipse, .line, .arrow, .polyline, .cloud]),
         ToolTab(id: "annotate", label: "Annotate", tools: [.highlighter, .underline, .strike, .squiggly, .textbox, .note, .callout, .stamps, .signature]),
+        ToolTab(id: "measure", label: "Measure", tools: [.distance, .perimeter, .area, .calibrate]),
         ToolTab(id: "edit", label: "Edit", tools: [.edittext, .image, .link, .redact, .rotatepg, .crop]),
         ToolTab(id: "forms", label: "Forms", tools: [.ftext, .farea, .fcheck, .fradio, .fdrop, .fdate, .fsig, .ftoggle])
     ]
@@ -268,7 +271,9 @@ public struct SavedSignature: Codable, Sendable, Hashable, Identifiable {
     public var paths: [[Point]]
     public var width: Double
     public var height: Double
-    public init(id: String = IDGen.make(), name: String, paths: [[Point]], width: Double, height: Double) {
-        self.id = id; self.name = name; self.paths = paths; self.width = width; self.height = height
+    /// An imported picture of a signature (PNG, background made transparent) instead of strokes.
+    public var image: Data?
+    public init(id: String = IDGen.make(), name: String, paths: [[Point]], width: Double, height: Double, image: Data? = nil) {
+        self.id = id; self.name = name; self.paths = paths; self.width = width; self.height = height; self.image = image
     }
 }

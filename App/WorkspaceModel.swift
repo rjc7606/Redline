@@ -167,6 +167,8 @@ final class WorkspaceModel {
     // comments
     var authorFilter: AuthorFilter = .all
     var commentSort: CommentSort = .page
+    var commentQuery = ""
+
     var commentShow: CommentShow = .all
     var replyDraft = ""
 

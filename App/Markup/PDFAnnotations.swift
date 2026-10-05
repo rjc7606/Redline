@@ -130,9 +130,11 @@ enum AnnotationFactory {
 
     /// The endings a line / arrow gets: the preset's choice, else the tool's default.
     static func endings(tool: Tool, style: StylePreset) -> (start: LineEnding, end: LineEnding) {
-        let dStart: LineEnding = tool == .dblarrow ? .open : .plain
-        let dEnd: LineEnding = (tool == .arrow || tool == .dblarrow) ? .open : .plain
-        return (style.lineStart ?? dStart, style.lineEnd ?? dEnd)
+        switch tool {
+        case .arrow: return (style.lineStart ?? .plain, style.lineEnd ?? .open)
+        case .dblarrow: return (.open, .open)   // older documents
+        default: return (.plain, .plain)        // plain lines have no endings
+        }
     }
 
     /// Bounds enclosing points with a margin for the stroke width.
@@ -467,6 +469,11 @@ enum AnnotationFactory {
 
     /// A saved signature placed as ink, `width` points wide, centred on `p`.
     static func signature(_ sig: SavedSignature, at p: CGPoint, width: CGFloat, style: StylePreset, author: String) -> PDFAnnotation {
+        if let data = sig.image, let img = UIImage(data: data) {
+            let a = image(img, at: p, width: width, author: author)
+            a.setValue(NSString(string: "/" + Tool.signature.rawValue), forAnnotationKey: .redlineTool)
+            return a
+        }
         let k = width / CGFloat(max(1, sig.width))
         let h = CGFloat(sig.height) * k
         // pad space is y-down; page space is y-up
@@ -476,12 +483,23 @@ enum AnnotationFactory {
     }
 
     /// Small measurement label (a text box grouped under the measured line so they move together).
-    static func measureLabel(_ text: String, near p: CGPoint, color: String, author: String, root: PDFAnnotation) -> PDFAnnotation {
+    /// Measurement label centred on `center`, tilted to `angle` (degrees, page space, counter-clockwise), grouped under the measurement.
+    static func measureLabel(_ text: String, center: CGPoint, angle: CGFloat = 0, color: String, author: String, root: PDFAnnotation) -> PDFAnnotation {
         var st = StylePreset(color: color, width: 1, background: "#FFFFFF", backgroundOpacity: 0.9, borderColor: color, borderOpacity: 1, borderWidth: 1)
         st.fontWeight = .semibold
         let font = RedlineFonts.page(size: 11, weight: .semibold)
-        let size = TextBoxRenderer.fittingSize(text: text, font: font)
-        let a = freeText(rect: CGRect(x: p.x + 6, y: p.y + 6, width: size.width, height: size.height), text: text, tool: .textbox, style: st, author: author, fontSize: 11)
+        var size = TextBoxRenderer.fittingSize(text: text, font: font)
+        size.width += 4
+        // Text reads left to right along the line: keep the tilt within ±90°.
+        var deg = angle
+        while deg > 90 { deg -= 180 }
+        while deg <= -90 { deg += 180 }
+        let rotation = -deg   // positive = clockwise on screen
+        let outer = TextBoxRenderer.outerSize(inner: size, rotation: rotation)
+        let a = freeText(rect: CGRect(x: center.x - outer.width / 2, y: center.y - outer.height / 2, width: outer.width, height: outer.height),
+                         text: text, tool: .textbox, style: st, author: author, fontSize: 11)
+        a.rotationDegrees = rotation
+        a.isManuallySized = true
         a.cornerRadius = 4
         a.alignment = .center
         var gid = root.value(forAnnotationKey: .redlineGroup) as? String
@@ -681,5 +699,34 @@ extension LineEnding {
         case .square, .diamond: self = .square
         default: self = .plain
         }
+    }
+}
+
+
+/// The "has a comment" bubble, drawn beside an annotation at a constant screen size.
+enum BadgeDrawer {
+    /// Badge centre: 14 screen points above the topmost ink point (bounds top for other kinds), in page space.
+    static func center(for a: PDFAnnotation, unit: CGFloat) -> CGPoint {
+        var top = CGPoint(x: a.bounds.midX, y: a.bounds.maxY)
+        if a.subtype == "Ink", let m = AnnotationFactory.inkPaths(a).flatMap({ $0 }).max(by: { $0.y < $1.y }) { top = m }
+        return CGPoint(x: top.x, y: top.y + 14 * unit)
+    }
+
+    /// Draws the bubble centred on `c`. `unit` = page units per screen point; `yUp` for page-space contexts.
+    static func draw(_ cg: CGContext, at c: CGPoint, color: UIColor, unit u: CGFloat, yUp: Bool) {
+        let fill = MarkupOverlayView.mix(color, towardWhite: 0.72), stroke = MarkupOverlayView.mix(color, towardWhite: 0.28)
+        let k: CGFloat = 20 / 24 * u
+        cg.saveGState()
+        if yUp { cg.translateBy(x: c.x - 10 * u, y: c.y + 10 * u); cg.scaleBy(x: 1, y: -1) }
+        else { cg.translateBy(x: c.x - 10 * u, y: c.y - 10 * u) }
+        let body = Glyphs.cgPath(Glyphs.bubble, scale: k)
+        cg.saveGState()
+        cg.setShadow(offset: CGSize(width: 0, height: yUp ? -1 * u : 1), blur: 2 * u, color: UIColor.black.withAlphaComponent(0.3).cgColor)
+        cg.setFillColor(fill.cgColor); cg.addPath(body); cg.fillPath()
+        cg.restoreGState()
+        cg.setStrokeColor(stroke.cgColor); cg.setLineWidth(2 * k); cg.setLineCap(.round); cg.setLineJoin(.round)
+        cg.addPath(body); cg.strokePath()
+        cg.addPath(Glyphs.cgPath(Glyphs.bubbleLines, scale: k)); cg.strokePath()
+        cg.restoreGState()
     }
 }

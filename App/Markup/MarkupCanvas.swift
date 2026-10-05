@@ -141,8 +141,9 @@ struct SelectionChrome: View {
             let canStyle = !isWidget && !isLink && !locked && editor.mkSelectedPreset() != nil
             let barW: CGFloat = 96 + (canComment ? 106 : 0) + (canStyle ? 118 : 0) + 86 + 36 + 92
             let x = min(max(8, r.midX - barW / 2), max(8, fw - barW - 8))
-            let above = r.minY - 14 - 40 >= 8
-            let y = above ? r.minY - 14 - 40 : min(r.maxY + 14, fh - 48)
+            let lift: CGFloat = editor.mkRotatable != nil ? 34 : 0   // leave the rotate handle clear
+            let above = r.minY - 14 - 40 - lift >= 8
+            let y = above ? r.minY - 14 - 40 - lift : min(r.maxY + 14, fh - 48)
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 12) {
                     Text(primaries <= 1 ? "1 selected" : "\(primaries) selected").font(fnt(13, .semibold)).foregroundStyle(theme.ink2)
@@ -314,6 +315,12 @@ struct PDFStackRepresentable: UIViewRepresentable {
                 self.editor.mk.viewportTick += 1
                 self.overlay.setNeedsDisplay()
             }
+            v.badgeProvider = { [weak self] page in
+                guard let self else { return { _ in false } }
+                let replied = self.editor.mkRepliedParents(on: page)
+                let ed = self.editor
+                return { a in a.isPrimary && !a.isWidget && ed.mkHasComment(a, replied: replied) }
+            }
             v.onPageChange = { [weak self] i in
                 guard let self, self.pendingScroll == nil else { return }
                 if i != self.editor.pageIndex { self.editor.pageIndex = i }
@@ -334,11 +341,17 @@ struct PDFStackRepresentable: UIViewRepresentable {
 
 // MARK: - Overlay: input + live drawing + selection chrome + ruler
 
-final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
+final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, UIEditMenuInteractionDelegate {
     unowned let editor: WorkspaceModel
     weak var pdfView: PDFStackView?
     private var active: UITouch?
     private var dragPage: PDFPage?
+    /// Long press with a finger: the system edit menu (Paste; Copy / Duplicate / Delete on an annotation).
+    private var pressTask: Task<Void, Never>? = nil
+    private var pressStart: CGPoint = .zero
+    private var pressSuppressUp = false
+    private var menuTarget: (page: PDFPage, point: CGPoint)? = nil
+    private var editMenu: UIEditMenuInteraction!
 
     init(editor: WorkspaceModel) {
         self.editor = editor
@@ -350,8 +363,43 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
         let pencil = UIPencilInteraction()
         pencil.delegate = self
         addInteraction(pencil)
+        editMenu = UIEditMenuInteraction(delegate: self)
+        addInteraction(editMenu)
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    private func longPress(at loc: CGPoint, page: PDFPage, point: CGPoint) {
+        guard active != nil, editor.mkIsPanning else { return }
+        editor.mkPointerCancel()
+        pressSuppressUp = true
+        menuTarget = (page, point)
+        captureScroll(false)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: loc))
+    }
+
+    func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]) -> UIMenu? {
+        guard let t = menuTarget else { return nil }
+        let ed = editor
+        var items: [UIMenuElement] = []
+        if let a = ed.mkAnnotation(at: t.point, page: t.page)?.annotation, !a.isWidget {
+            items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
+                MainActor.assumeIsolated { ed.mkSelect(a, on: t.page); ed.mkCopySelection() }
+            })
+            items.append(UIAction(title: "Duplicate", image: UIImage(systemName: "plus.square.on.square")) { _ in
+                MainActor.assumeIsolated { ed.mkSelect(a, on: t.page); ed.mkDuplicateSelection() }
+            })
+            items.append(UIAction(title: "Delete", image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
+                MainActor.assumeIsolated { ed.mkSelect(a, on: t.page); ed.mkDeleteSelection() }
+            })
+        }
+        if !ed.app.clipboard.isEmpty {
+            items.append(UIAction(title: "Paste", image: UIImage(systemName: "doc.on.clipboard")) { _ in
+                MainActor.assumeIsolated { ed.mkPaste(at: t.point) }
+            })
+        }
+        return items.isEmpty ? nil : UIMenu(children: items)
+    }
 
     func pencilInteractionDidTap(_ interaction: UIPencilInteraction) {
         if UIPencilInteraction.preferredTapAction == .ignore { return }
@@ -443,6 +491,15 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             }
             editor.mkPointerDown(s, page: page, at: p)
             if overlayOwnsDrag { captureScroll(true) }
+            if !s.isPencil, editor.mkIsPanning {
+                pressStart = s.location
+                pressTask?.cancel()
+                pressTask = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard !Task.isCancelled, let self else { return }
+                    self.longPress(at: s.location, page: page, point: p)
+                }
+            }
             setNeedsDisplay()
         } else if active != nil {
             // A second finger: give the touch back to the scroll view (pinch / two-finger pan).
@@ -456,6 +513,10 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = active, touches.contains(t), let page = dragPage else { return }
+        if pressTask != nil {
+            let l = t.location(in: self)
+            if hypot(l.x - pressStart.x, l.y - pressStart.y) > 10 { pressTask?.cancel(); pressTask = nil }
+        }
         for c in event?.coalescedTouches(for: t) ?? [t] {
             let s = sample(c)
             guard let (_, p) = pageAndPoint(for: s.location) else { continue }
@@ -466,7 +527,9 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = active, touches.contains(t) else { return }
+        pressTask?.cancel(); pressTask = nil
         active = nil
+        if pressSuppressUp { pressSuppressUp = false; dragPage = nil; return }
         let s = sample(t)
         if let page = dragPage, let (_, p) = pageAndPoint(for: s.location) { editor.mkPointerUp(s, page: page, at: p) }
         dragPage = nil
@@ -476,6 +539,8 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = active, touches.contains(t) else { return }
+        pressTask?.cancel(); pressTask = nil
+        pressSuppressUp = false
         active = nil
         dragPage = nil
         editor.mkPointerCancel()
@@ -730,13 +795,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate {
             cg.restoreGState()
         }
 
-        // Comment badges on annotations that carry text or replies
-        for page in visiblePages(v) {
-            let replied = editor.mkRepliedParents(on: page)
-            for a in page.annotations where a.isPrimary && !a.isWidget && editor.mkHasComment(a, replied: replied) {
-                drawBadge(cg, at: badgeCenter(for: a, on: page), color: a.color, u: u)
-            }
-        }
+        // (Comment badges are drawn on the annotation layer, beside their annotation.)
 
         // Selection
         if let first = mk.selected.first, let page = first.page {
@@ -989,7 +1048,19 @@ struct SignatureSheet: View {
     @State private var current: [CGPoint] = []
     @State private var name = "Signature"
     @State private var padWidthOnScreen: CGFloat = 520
+    @State private var photoItem: PhotosPickerItem? = nil
+    @State private var fileOn = false
     private let padSize = CGSize(width: 520, height: 200)
+
+    /// A picture of a signature: trimmed to the ink, white paper made transparent, saved as an image signature.
+    private func importSignature(_ raw: UIImage) {
+        guard let png = SignatureImage.prepare(raw) else { app.flash("Couldn't read that image"); return }
+        let sig = SavedSignature(name: name.isEmpty ? "Signature" : name, paths: [], width: Double(png.size.width), height: Double(png.size.height),
+                                 image: png.data)
+        var s = app.settings; s.signatures = [sig] + (s.signatures ?? []); app.settings = s
+        editor.mk.signaturePadOn = false
+        app.flash("Saved. Tap the page to place it.")
+    }
 
     var body: some View {
         let saved = app.settings.signatures ?? []
@@ -1015,7 +1086,31 @@ struct SignatureSheet: View {
                     }
                 }
             }
-            SectionLabel(text: "Draw a new one")
+            HStack(spacing: 10) {
+                SectionLabel(text: "Draw a new one")
+                Spacer()
+                PhotosPicker(selection: $photoItem, matching: .images) {
+                    HStack(spacing: 5) { Image(systemName: "photo").font(fnt(12, .semibold)); Text("From photo").font(fnt(12, .semibold)) }
+                        .foregroundStyle(theme.ink2).padding(.horizontal, 10).frame(height: 28)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(theme.hov))
+                }
+                SecondaryButton(label: "From file…", symbol: "folder", height: 28) { fileOn = true }
+            }
+            .onChange(of: photoItem) { _, it in
+                guard let it else { return }
+                Task { @MainActor in
+                    if let data = try? await it.loadTransferable(type: Data.self), let img = UIImage(data: data) { importSignature(img) }
+                    else { app.flash("Couldn't load that image") }
+                    photoItem = nil
+                }
+            }
+            .fileImporter(isPresented: $fileOn, allowedContentTypes: [UTType.image]) { result in
+                if case .success(let url) = result {
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    if let data = try? Data(contentsOf: url), let img = UIImage(data: data) { importSignature(img) } else { app.flash("Couldn't load that image") }
+                }
+            }
             Canvas { ctx, size in
                 let k = size.width / padSize.width
                 for path in paths + [current] where path.count > 1 {
@@ -1066,6 +1161,13 @@ struct SignaturePreview: View {
     var sig: SavedSignature
     var color: Color
     var body: some View {
+        if let data = sig.image, let img = UIImage(data: data) {
+            Image(uiImage: img).resizable().scaledToFit().padding(6)
+        } else {
+            strokes
+        }
+    }
+    private var strokes: some View {
         Canvas { ctx, size in
             let k = min((size.width - 12) / CGFloat(max(1, sig.width)), (size.height - 12) / CGFloat(max(1, sig.height)))
             let ox = (size.width - CGFloat(sig.width) * k) / 2, oy = (size.height - CGFloat(sig.height) * k) / 2
@@ -1226,5 +1328,47 @@ struct CropSheet: View {
         .frame(maxWidth: 440)
         .background(theme.bg2)
         .presentationDetents([.height(200)])
+    }
+}
+
+
+/// Turns a photo or scan of a signature into a transparent PNG: near-white paper becomes clear, the ink is kept
+/// and the result is trimmed to the ink.
+enum SignatureImage {
+    static func prepare(_ raw: UIImage) -> (data: Data, size: CGSize)? {
+        let maxSide: CGFloat = 1200
+        let pixelW = raw.size.width * raw.scale, pixelH = raw.size.height * raw.scale
+        let k = min(1, maxSide / max(pixelW, pixelH))
+        let w = Int(pixelW * k), h = Int(pixelH * k)
+        guard w > 2, h > 2 else { return nil }
+        var buf = [UInt8](repeating: 0, count: w * h * 4)
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let cg = CGContext(data: &buf, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: cs,
+                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue), let img = raw.cgImage else { return nil }
+        cg.setFillColor(UIColor.white.cgColor); cg.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        cg.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var minX = w, minY = h, maxX = -1, maxY = -1
+        for y in 0..<h {
+            for x in 0..<w {
+                let i = (y * w + x) * 4
+                let r = Int(buf[i]), g = Int(buf[i + 1]), b = Int(buf[i + 2])
+                let light = min(r, g, b)
+                if light > 225 {
+                    buf[i] = 0; buf[i + 1] = 0; buf[i + 2] = 0; buf[i + 3] = 0   // paper → transparent
+                } else {
+                    // ink: darken a little and fade the edge pixels so the stroke looks smooth
+                    let a = min(255, (240 - light) * 2)
+                    buf[i] = UInt8(r * a / 255); buf[i + 1] = UInt8(g * a / 255); buf[i + 2] = UInt8(b * a / 255); buf[i + 3] = UInt8(a)
+                    minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
+                }
+            }
+        }
+        guard maxX >= minX, maxY >= minY, let full = cg.makeImage() else { return nil }
+        let pad = 6
+        let crop = CGRect(x: max(0, minX - pad), y: max(0, minY - pad), width: min(w, maxX + pad) - max(0, minX - pad), height: min(h, maxY + pad) - max(0, minY - pad))
+        guard let cut = full.cropping(to: crop) else { return nil }
+        let out = UIImage(cgImage: cut)
+        guard let data = out.pngData() else { return nil }
+        return (data, CGSize(width: crop.width, height: crop.height))
     }
 }

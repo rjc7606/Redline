@@ -34,6 +34,9 @@ final class PDFStackView: UIScrollView, UIScrollViewDelegate {
     }
 
     var onViewportChange: (() -> Void)?
+    /// Per page: which annotations carry a comment badge (drawn on the annotation layer, right after the annotation,
+    /// so anything moved over it covers the badge too).
+    var badgeProvider: ((PDFPage) -> (PDFAnnotation) -> Bool)? { didSet { for v in annotationViews { v.badges = badgeProvider } } }
     var onPageChange: ((Int) -> Void)?
 
     override init(frame: CGRect) {
@@ -75,6 +78,7 @@ final class PDFStackView: UIScrollView, UIScrollViewDelegate {
             guard let page = doc.page(at: i) else { continue }
             let tile = PDFPageTileView(page: page)
             let ann = PDFAnnotationsView(page: page)
+            ann.badges = badgeProvider
             documentView.insertSubview(tile, at: 0)
             documentView.insertSubview(ann, aboveSubview: tile)
             tiles.append(tile); annotationViews.append(ann)
@@ -361,12 +365,21 @@ final class PDFAnnotationsView: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    var badges: ((PDFPage) -> (PDFAnnotation) -> Bool)? = nil
+
     override func draw(_ rect: CGRect) {
         guard let cg = UIGraphicsGetCurrentContext() else { return }
         cg.saveGState()
         cg.translateBy(x: 0, y: bounds.height)
         cg.scaleBy(x: scale, y: -scale)
-        PDFDraw.annotations(of: page, in: cg)
+        let unit = 1 / max(0.01, scale)
+        if let has = badges?(page) {
+            PDFDraw.annotations(of: page, in: cg) { a, cg in
+                if has(a) { BadgeDrawer.draw(cg, at: BadgeDrawer.center(for: a, unit: unit), color: a.color, unit: unit, yUp: true) }
+            }
+        } else {
+            PDFDraw.annotations(of: page, in: cg)
+        }
         cg.restoreGState()
     }
 }

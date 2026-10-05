@@ -44,12 +44,23 @@ struct PDFCommentsPanel: View {
                 .buttonStyle(.plain)
                 .help("Next unresolved comment")
             }
-            .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
+            .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass").font(fnt(12, .semibold)).foregroundStyle(theme.ink4)
+                TextField("Search comments and authors", text: Binding(get: { editor.commentQuery }, set: { editor.commentQuery = $0 }))
+                    .font(fnt(13)).foregroundStyle(theme.ink1).textFieldStyle(.plain).autocorrectionDisabled()
+                if !editor.commentQuery.isEmpty {
+                    Button { editor.commentQuery = "" } label: { Image(systemName: "xmark.circle.fill").font(fnt(13)).foregroundStyle(theme.ink4) }.buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 10).frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(theme.field))
+            .padding(.horizontal, 12).padding(.bottom, 10)
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(items) { c in PDFCommentRow(editor: editor, item: c) }
                     if items.isEmpty {
-                        Text(editor.commentShow == .all && editor.authorFilter == .all ? "No annotations yet. Every mark you make is a PDF annotation with your name and time." : "Nothing matches the current filter.")
+                        Text(editor.commentShow == .all && editor.authorFilter == .all && editor.commentQuery.isEmpty ? "No annotations yet. Every mark you make is a PDF annotation with your name and time." : "Nothing matches the current filter.")
                             .font(fnt(12.5)).foregroundStyle(theme.ink4).multilineTextAlignment(.center).lineSpacing(3)
                             .padding(.vertical, 22).padding(.horizontal, 12)
                     }

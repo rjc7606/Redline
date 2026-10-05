@@ -29,6 +29,17 @@ struct PresetsRow: View {
                         Text("A").font(fnt(13, .bold)).foregroundStyle(Color(hex: p.color))
                     } else if isEraser {
                         Circle().fill(theme.ink3).frame(width: max(4, min(24, p.width * 0.6)), height: max(4, min(24, p.width * 0.6)))
+                    } else if tool == .arrow {
+                        let e = AnnotationFactory.endings(tool: tool, style: p)
+                        Canvas { ctx, size in
+                            let w = max(1.5, min(4, h / 3))
+                            let a = CGPoint(x: 6, y: size.height - 6), b = CGPoint(x: size.width - 6, y: 6)
+                            var path = Path(); path.move(to: a); path.addLine(to: b)
+                            ctx.stroke(path, with: .color(Color(hex: p.color)), style: StrokeStyle(lineWidth: w, lineCap: .round))
+                            EndingSample.drawEnding(e.end, in: &ctx, tip: b, from: a, width: w, color: Color(hex: p.color))
+                            EndingSample.drawEnding(e.start, in: &ctx, tip: a, from: b, width: w, color: Color(hex: p.color))
+                        }
+                        .frame(width: 26, height: 26)
                     } else if !isShape && !isFill {
                         Capsule().fill(Color(hex: p.color)).frame(width: 16, height: h)
                     }
@@ -161,20 +172,12 @@ struct StylePopoverView: View {
                 SecondaryButton(label: "Manage signatures…", symbol: "signature") { editor.mk.signaturePadOn = true; editor.closePopovers() }
                     .padding(.bottom, 12)
             }
-            if [Tool.line, .arrow, .dblarrow].contains(tool) && target == .color {
+            if tool == .arrow && target == .color {
                 let e = AnnotationFactory.endings(tool: tool, style: st)
-                SectionLabel(text: "Line endings").padding(.top, 16).padding(.bottom, 8)
+                SectionLabel(text: "Arrow ends").padding(.top, 16).padding(.bottom, 8)
                 VStack(spacing: 8) {
-                    HStack(spacing: 8) {
-                        Text("Start").font(fnt(11.5, .semibold)).foregroundStyle(theme.ink3).frame(width: 36, alignment: .leading)
-                        SegmentControl(options: LineEnding.allCases.map { SegmentOption(value: $0, label: $0.label) },
-                                       selection: Binding(get: { e.start }, set: { v in set { $0.lineStart = v } }), fontSize: 11, vPad: 4, hPad: 4, radius: 8, fill: true)
-                    }
-                    HStack(spacing: 8) {
-                        Text("End").font(fnt(11.5, .semibold)).foregroundStyle(theme.ink3).frame(width: 36, alignment: .leading)
-                        SegmentControl(options: LineEnding.allCases.map { SegmentOption(value: $0, label: $0.label) },
-                                       selection: Binding(get: { e.end }, set: { v in set { $0.lineEnd = v } }), fontSize: 11, vPad: 4, hPad: 4, radius: 8, fill: true)
-                    }
+                    endingRow(label: "Start", atStart: true, current: e.start, color: Color(hex: st.color)) { v in set { $0.lineStart = v } }
+                    endingRow(label: "End", atStart: false, current: e.end, color: Color(hex: st.color)) { v in set { $0.lineEnd = v } }
                 }
             }
             if tool == .cloud && target == .color {
@@ -344,6 +347,66 @@ struct PatternSwatch: View {
                     }
                 }
             }
+        }
+    }
+}
+
+extension StylePopoverView {
+    /// One row of ending pictures (none, open, filled, dot, square) for the start or the end of an arrow.
+    func endingRow(label: String, atStart: Bool, current: LineEnding, color: Color, pick: @escaping (LineEnding) -> Void) -> some View {
+        HStack(spacing: 6) {
+            Text(label).font(fnt(11.5, .semibold)).foregroundStyle(theme.ink3).frame(width: 34, alignment: .leading)
+            ForEach(LineEnding.allCases, id: \.self) { e in
+                EndingSample(ending: e, atStart: atStart, color: color)
+                    .frame(height: 26)
+                    .frame(maxWidth: .infinity)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.03)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(current == e ? theme.accent : .clear, lineWidth: 2))
+                    .contentShape(Rectangle())
+                    .onTapGesture { pick(e) }
+                    .accessibilityLabel(e.label)
+            }
+        }
+    }
+}
+
+/// A short horizontal line with one ending drawn at its start or end.
+struct EndingSample: View {
+    var ending: LineEnding
+    var atStart: Bool
+    var color: Color
+    var lineWidth: CGFloat = 2.2
+    var body: some View {
+        Canvas { ctx, size in
+            let y = size.height / 2
+            let a = CGPoint(x: 6, y: y), b = CGPoint(x: size.width - 6, y: y)
+            var p = Path(); p.move(to: a); p.addLine(to: b)
+            ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+            EndingSample.drawEnding(ending, in: &ctx, tip: atStart ? a : b, from: atStart ? b : a, width: lineWidth, color: color)
+        }
+    }
+
+    static func drawEnding(_ e: LineEnding, in ctx: inout GraphicsContext, tip: CGPoint, from: CGPoint, width w: CGFloat, color: Color) {
+        let size = max(7, w * 4)
+        let ang = atan2(tip.y - from.y, tip.x - from.x)
+        let l = CGPoint(x: tip.x - size * cos(ang - 0.45), y: tip.y - size * sin(ang - 0.45))
+        let r = CGPoint(x: tip.x - size * cos(ang + 0.45), y: tip.y - size * sin(ang + 0.45))
+        switch e {
+        case .plain: break
+        case .open:
+            var p = Path(); p.move(to: l); p.addLine(to: tip); p.addLine(to: r)
+            ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: w, lineCap: .round, lineJoin: .round))
+        case .closed:
+            var p = Path(); p.move(to: l); p.addLine(to: tip); p.addLine(to: r); p.closeSubpath()
+            ctx.fill(p, with: .color(color)); ctx.stroke(p, with: .color(color), style: StrokeStyle(lineWidth: w, lineJoin: .round))
+        case .dot:
+            let rad = max(2.5, w * 1.8)
+            ctx.fill(Path(ellipseIn: CGRect(x: tip.x - rad, y: tip.y - rad, width: rad * 2, height: rad * 2)), with: .color(color))
+        case .square:
+            let rad = max(2.5, w * 1.6)
+            var p = Path(CGRect(x: -rad, y: -rad, width: rad * 2, height: rad * 2))
+            p = p.applying(CGAffineTransform(translationX: tip.x, y: tip.y).rotated(by: ang))
+            ctx.fill(p, with: .color(color))
         }
     }
 }

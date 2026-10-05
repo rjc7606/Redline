@@ -405,7 +405,7 @@ extension ToolStyles {
     #expect(z > 0.9 && z <= 1.4)
     let zs = Metrics.fitZoom(canvas: Metrics.notesCanvas, available: Size(1000, 700), spread: true)
     #expect(zs < 0.9)
-    #expect(ToolCatalog.markupTabs.map(\.id) == ["draw", "annotate", "edit", "forms"])
+    #expect(ToolCatalog.markupTabs.map(\.id) == ["draw", "annotate", "measure", "edit", "forms"])
     #expect(Tool.pen.hasPresets && Tool.eraser.hasPresets && !Tool.select.hasPresets)
     #expect(ToolCatalog.tool(for: .list) == .flist)
     #expect(ToolCatalog.pickHint(for: .distance, rulerLocked: false) == "Drag on the page — distance")

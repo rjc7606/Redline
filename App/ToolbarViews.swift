@@ -303,9 +303,6 @@ struct MarkupToolStrip: View {
             }
             Spacer(minLength: 0)
             Rectangle().fill(theme.line2).frame(width: 1, height: 30).padding(.horizontal, 8)
-            if !editor.app.clipboard.isEmpty {
-                BarButton(symbol: "doc.on.clipboard", label: "Paste") { editor.mkPaste() }
-            }
             if editor.mkPendingRedactions > 0 {
                 BarButton(symbol: "eye.slash.fill", label: "Apply redactions — remove the marked content for good") { editor.mk.redactConfirm = true }
             }
