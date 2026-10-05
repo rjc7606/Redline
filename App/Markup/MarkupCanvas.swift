@@ -18,6 +18,7 @@ struct MarkupCanvas: View {
             GrainBackground(color: theme.canvas)
             PDFStackRepresentable(editor: editor, tick: mk.renderTick, viewportTick: mk.viewportTick, canvasColor: UIColor(hex: theme.tokens.canvas))
             if let te = mk.textEdit { PDFTextEditor(editor: editor, edit: te) }
+            if let pe = mk.pageTextEdit { PageTextEditBox(editor: editor, edit: pe) }
             if let fe = mk.fieldEdit { PDFFieldEditor(editor: editor, widget: fe) }
             if mk.annotationPopup, mk.textEdit == nil { PDFAnnotationPopup(editor: editor) }
         }
@@ -341,7 +342,7 @@ struct PDFStackRepresentable: UIViewRepresentable {
 
 // MARK: - Overlay: input + live drawing + selection chrome + ruler
 
-final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, UIEditMenuInteractionDelegate {
+final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, @preconcurrency UIEditMenuInteractionDelegate {
     unowned let editor: WorkspaceModel
     weak var pdfView: PDFStackView?
     private var active: UITouch?
@@ -352,6 +353,9 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, UIEditMenuIn
     private var pressSuppressUp = false
     private var menuTarget: (page: PDFPage, point: CGPoint)? = nil
     private var editMenu: UIEditMenuInteraction!
+    /// Long press on page text with no tool (or Select): a word is selected, dragging extends it.
+    private var textSelecting = false
+    private var textSelAnchor: CGPoint = .zero
 
     init(editor: WorkspaceModel) {
         self.editor = editor
@@ -370,6 +374,19 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, UIEditMenuIn
 
     private func longPress(at loc: CGPoint, page: PDFPage, point: CGPoint) {
         guard active != nil, editor.mkIsPanning else { return }
+        let textTool = editor.tool == .none || editor.tool.info.kind == .select
+        if textTool, editor.mkAnnotation(at: point, page: page) == nil, let word = page.selectionForWord(at: point), !(word.string ?? "").isEmpty {
+            // Page text: select the word; dragging extends the selection, lifting shows Copy / Highlight / Edit…
+            editor.mkPointerCancel()
+            textSelecting = true
+            textSelAnchor = point
+            editor.mk.textSel = word
+            editor.mk.textSelPage = page
+            captureScroll(true)
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            setNeedsDisplay()
+            return
+        }
         editor.mkPointerCancel()
         pressSuppressUp = true
         menuTarget = (page, point)
@@ -379,8 +396,24 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, UIEditMenuIn
     }
 
     func editMenuInteraction(_ interaction: UIEditMenuInteraction, menuFor configuration: UIEditMenuConfiguration, suggestedActions: [UIMenuElement]) -> UIMenu? {
-        guard let t = menuTarget else { return nil }
         let ed = editor
+        if menuTarget == nil, let sel = ed.mk.textSel, let page = ed.mk.textSelPage {
+            var items: [UIMenuElement] = []
+            items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
+                MainActor.assumeIsolated { UIPasteboard.general.string = sel.string ?? ""; ed.app.flash("Copied"); ed.mkClearTextSelection() }
+            })
+            items.append(UIAction(title: "Highlight", image: UIImage(systemName: "highlighter")) { _ in MainActor.assumeIsolated { ed.mkMarkupFromSelection(.highlighter) } })
+            items.append(UIAction(title: "Underline", image: UIImage(systemName: "underline")) { _ in MainActor.assumeIsolated { ed.mkMarkupFromSelection(.underline) } })
+            items.append(UIAction(title: "Strikethrough", image: UIImage(systemName: "strikethrough")) { _ in MainActor.assumeIsolated { ed.mkMarkupFromSelection(.strike) } })
+            if sel.selectionsByLine().count == 1 {
+                items.append(UIAction(title: "Edit text", image: UIImage(systemName: "text.cursor")) { _ in
+                    MainActor.assumeIsolated { ed.mkBeginPageTextEdit(page: page, lineRect: sel.bounds(for: page), text: sel.string ?? ""); ed.mkClearTextSelection() }
+                })
+            }
+            items.append(UIAction(title: "Redact", image: UIImage(systemName: "eye.slash"), attributes: .destructive) { _ in MainActor.assumeIsolated { ed.mkRedactSelection() } })
+            return UIMenu(children: items)
+        }
+        guard let t = menuTarget else { return nil }
         var items: [UIMenuElement] = []
         if let a = ed.mkAnnotation(at: t.point, page: t.page)?.annotation, !a.isWidget {
             items.append(UIAction(title: "Copy", image: UIImage(systemName: "doc.on.doc")) { _ in
@@ -513,6 +546,11 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, UIEditMenuIn
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let t = active, touches.contains(t), let page = dragPage else { return }
+        if textSelecting {
+            if let (pg, p) = pageAndPoint(for: t.location(in: self)), pg === page { editor.mk.textSel = page.selection(from: textSelAnchor, to: p) }
+            setNeedsDisplay()
+            return
+        }
         if pressTask != nil {
             let l = t.location(in: self)
             if hypot(l.x - pressStart.x, l.y - pressStart.y) > 10 { pressTask?.cancel(); pressTask = nil }
@@ -529,6 +567,15 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, UIEditMenuIn
         guard let t = active, touches.contains(t) else { return }
         pressTask?.cancel(); pressTask = nil
         active = nil
+        if textSelecting {
+            textSelecting = false
+            dragPage = nil
+            captureScroll(false)
+            menuTarget = nil
+            if editor.mk.textSel != nil { editMenu.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: t.location(in: self))) }
+            setNeedsDisplay()
+            return
+        }
         if pressSuppressUp { pressSuppressUp = false; dragPage = nil; return }
         let s = sample(t)
         if let page = dragPage, let (_, p) = pageAndPoint(for: s.location) { editor.mkPointerUp(s, page: page, at: p) }
@@ -541,6 +588,7 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, UIEditMenuIn
         guard let t = active, touches.contains(t) else { return }
         pressTask?.cancel(); pressTask = nil
         pressSuppressUp = false
+        textSelecting = false
         active = nil
         dragPage = nil
         editor.mkPointerCancel()
@@ -753,6 +801,14 @@ final class MarkupOverlayView: UIView, UIPencilInteractionDelegate, UIEditMenuIn
                 let c = overlayPoint(MarkupGeometry.centroid(mk.polyPoints), on: page)
                 drawPill(cg, editor.mkMeasure.formatArea(points2: Double(MarkupGeometry.polygonArea(mk.polyPoints))), at: c, u: u)
             }
+        }
+
+        // Page-text selection (long press with no tool)
+        if let sel = mk.textSel, let page = mk.textSelPage {
+            cg.saveGState()
+            cg.setFillColor(accent.withAlphaComponent(0.28).cgColor)
+            for line in sel.selectionsByLine() { cg.fill(overlayRect(line.bounds(for: page), on: page).insetBy(dx: -1 * u, dy: -1 * u)) }
+            cg.restoreGState()
         }
 
         // Search hits: the current one in accent, the rest in yellow
@@ -1370,5 +1426,37 @@ enum SignatureImage {
         let out = UIImage(cgImage: cut)
         guard let data = out.pngData() else { return nil }
         return (data, CGSize(width: crop.width, height: crop.height))
+    }
+}
+
+
+/// Editing a line of the page's own text in place: a field over the line, same size; Return or a tap outside
+/// writes the change into the page content.
+struct PageTextEditBox: View {
+    @Environment(\.theme) private var theme
+    @Bindable var editor: WorkspaceModel
+    var edit: PageTextEdit
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let mk = editor.mk
+        let _ = mk.viewportTick
+        if let v = mk.pdfView {
+            let r = v.convert(edit.rect, from: edit.page)
+            let fontSize = max(9, r.height * 0.74)
+            TextField("", text: Binding(get: { mk.pageTextDraft }, set: { mk.pageTextDraft = $0 }))
+                .font(.system(size: fontSize))
+                .foregroundStyle(Color.black)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .focused($focused)
+                .onSubmit { editor.mkCommitPageTextEdit() }
+                .padding(.horizontal, 3)
+                .frame(width: max(r.width + 40, 80), height: max(r.height + 6, 22))
+                .background(RoundedRectangle(cornerRadius: 3).fill(Color.white))
+                .overlay(RoundedRectangle(cornerRadius: 3).stroke(theme.accent, lineWidth: 1.5))
+                .position(x: r.minX - 3 + max(r.width + 40, 80) / 2, y: r.midY)
+                .onAppear { focused = true }
+        }
     }
 }

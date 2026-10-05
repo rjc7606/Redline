@@ -175,9 +175,13 @@ swift test
   document, so an edit in one shows in the others.
 - Crop (Edit tab): drag the area to keep; the page's crop box is set, which every reader honours, and Organize
   Pages has a reset button for cropped pages. Redline displays the crop box of every PDF (as other readers do).
-- Redact: black boxes are marks until you press Apply redactions in the tool bar. Applying rebuilds each affected
-  page as an image with the marked areas painted black, so the content underneath is gone from the file; other
-  annotations on those pages are kept, but their text is no longer selectable or searchable.
-- Edit text (Edit tab): tap a line of page text and a white patch covers it with an editable text box holding the
-  same words, grouped so they move together. The original text stays in the file underneath (use Redact to remove
-  it); the patch is white, so it suits white pages.
+- Page text: long-press a word with no tool (or Select) to select it, drag to extend; the menu offers Copy,
+  Highlight, Underline, Strikethrough, Edit text (one line) and Redact.
+- Redact: black boxes are marks until you press Apply redactions in the tool bar. Applying rewrites the page's
+  drawing commands: the glyphs under a mark are removed (the rest of the line stays put), pictures fully under a
+  mark are removed, and the area is painted black. The page stays a text page; the file is then rewritten so the
+  old content is not carried along. Pictures only partly under a mark are covered, not cut (their pixels remain).
+- Edit text (Edit tab, or Edit text in the text menu): tap a line of the page's own text, change it, press Return
+  or tap outside. The old glyphs are removed from the page content and the new text is drawn at the same place,
+  size and colour; the original font is reused when the file doesn't embed it, otherwise a matching standard
+  font (Helvetica / Times / Courier family) is used. Scanned pages and outlined text can't be edited this way.

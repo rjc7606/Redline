@@ -195,7 +195,7 @@ public enum ToolCatalog {
         .datestamp: ToolInfo(label: "Date stamp", kind: .stampPreset, symbol: "calendar.badge.checkmark", stampText: "RECEIVED", stampColor: "#FF3B30"),
         .initials: ToolInfo(label: "Initials", kind: .stampPreset, symbol: "textformat.abc", stampText: "T.M.", stampColor: "#007AFF"),
 
-        .edittext: ToolInfo(label: "Edit text — tap a line of text to replace it", kind: .place, symbol: "text.cursor"),
+        .edittext: ToolInfo(label: "Edit text — tap a line of the page's text to change it", kind: .place, symbol: "text.cursor"),
         .image: ToolInfo(label: "Insert image — pick a photo, then tap the page", kind: .place, symbol: "photo.badge.plus"),
         .link: ToolInfo(label: "Link — drag a box, then enter a web address or page", kind: .shape, symbol: "link"),
         .redact: ToolInfo(label: "Redact", kind: .shape, symbol: "eye.slash"),
